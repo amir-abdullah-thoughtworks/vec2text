@@ -917,7 +917,7 @@ class InversionModel(transformers.PreTrainedModel):
                 training_guidance_freq=self.diffusion_training_guidance_freq,
             )
             diffusion_loss = diff_loss
-            total_loss = ce_loss + 0.1 * diffusion_loss
+            total_loss = 2.0 * ce_loss + 0.1 * diffusion_loss
 
         return DiffusionSeq2SeqLMOutput(
             loss=total_loss,
