@@ -876,6 +876,8 @@ class InversionModel(transformers.PreTrainedModel):
         labels: Optional[torch.Tensor] = None,
         frozen_embeddings: Optional[torch.Tensor] = None,
         decoder_input_ids: Optional[torch.Tensor] = None,
+        train_step: int = 0,
+        max_steps: int = 100000,
         **kwargs,
     ) -> DiffusionSeq2SeqLMOutput:
         debug_print("---In forward()---")
@@ -886,6 +888,7 @@ class InversionModel(transformers.PreTrainedModel):
         )
         debug_print(f"---forward() :: inputs_embeds.shape: {inputs_embeds.shape}---")
         debug_print(f"---forward() :: attention_mask.shape: {attention_mask.shape}")
+
         seq2seq_outputs = self.encoder_decoder(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
@@ -895,7 +898,21 @@ class InversionModel(transformers.PreTrainedModel):
 
         ce_loss = seq2seq_outputs.loss
         diffusion_loss = None
-        total_loss = ce_loss
+
+        # By default, if we didn't do diffusion, total_loss = ce_loss
+        total_loss = ce_loss  
+
+        # (A) SCHEDULING SETUP
+        progress = min(float(train_step) / float(max_steps), 1.0)
+
+        # Example: 
+        #   CE from 1.0 -> 2.0 linearly over training
+        #   Diff from 1.0 -> 0.1 linearly
+        ce_weight_start, ce_weight_end = 1.0, 2.0
+        diff_weight_start, diff_weight_end = 1.0, 0.1
+
+        base_ce_weight = ce_weight_start + (ce_weight_end - ce_weight_start) * progress
+        base_diff_weight = diff_weight_start + (diff_weight_end - diff_weight_start) * progress
 
         if self.use_diffusion and self.training:
             debug_print(f"---forward() :: Using diffusion and training---")
@@ -905,10 +922,6 @@ class InversionModel(transformers.PreTrainedModel):
                 self._diffusion_compress = nn.Linear(lat_mean.size(-1), self.latent_dim).to(self.device)
             z0 = self._diffusion_compress(lat_mean)
 
-            # (3) scale down again if you like, or rely on embed_and_project scaling
-            # z0 = 0.1 * z0 
-
-            # call v-pred diffusion forward
             diff_loss = self.guided_diffusion(
                 z0,
                 t=None,
@@ -917,7 +930,20 @@ class InversionModel(transformers.PreTrainedModel):
                 training_guidance_freq=self.diffusion_training_guidance_freq,
             )
             diffusion_loss = diff_loss
-            total_loss = 2.0 * ce_loss + 0.1 * diffusion_loss
+
+            # (B) RATIO-BASED SCALING
+            # measure the raw magnitudes of each sub-loss:
+            ce_val   = ce_loss.detach().item() + 1e-7
+            diff_val = diffusion_loss.detach().item() + 1e-7
+
+            ratio = ce_val / diff_val
+            ratio_sqrt = ratio**0.5
+
+            # final weights
+            dynamic_ce_weight   = base_ce_weight * ratio_sqrt
+            dynamic_diff_weight = base_diff_weight / ratio_sqrt
+
+            total_loss = dynamic_ce_weight * ce_loss + dynamic_diff_weight * diffusion_loss
 
         return DiffusionSeq2SeqLMOutput(
             loss=total_loss,

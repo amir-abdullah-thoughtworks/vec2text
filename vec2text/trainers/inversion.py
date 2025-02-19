@@ -22,10 +22,16 @@ class InversionTrainer(BaseTrainer):
         return self.model.generate(inputs=inputs, generation_kwargs=generation_kwargs)
     
     def compute_loss(self, model, inputs, return_outputs=False):
+        current_step = self.state.global_step
+        total_steps  = self.args.max_steps
+
+        inputs["train_step"] = current_step
+        inputs["max_steps"]  = total_steps
+
         outputs = model(**inputs)
-        # outputs might have "loss" and "diffusion_loss"
         loss = outputs.loss
         diffusion_loss = outputs.diffusion_loss
+
         if diffusion_loss is not None:
             self.log({"train/diffusion_loss": diffusion_loss.detach().item()})
         return (loss, outputs) if return_outputs else loss
