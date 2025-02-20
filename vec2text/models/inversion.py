@@ -906,10 +906,10 @@ class InversionModel(transformers.PreTrainedModel):
         progress = min(float(train_step) / float(max_steps), 1.0)
 
         # Example: 
-        #   CE from 1.0 -> 2.0 linearly over training
-        #   Diff from 1.0 -> 0.1 linearly
-        ce_weight_start, ce_weight_end = 1.0, 2.0
-        diff_weight_start, diff_weight_end = 1.0, 0.1
+        #   CE from 2.0 -> 4.0 linearly over training
+        #   Diff from 1.0 -> 0.01 linearly
+        ce_weight_start, ce_weight_end = 2.0, 4.0
+        diff_weight_start, diff_weight_end = 1.0, 0.01
 
         base_ce_weight = ce_weight_start + (ce_weight_end - ce_weight_start) * progress
         base_diff_weight = diff_weight_start + (diff_weight_end - diff_weight_start) * progress
