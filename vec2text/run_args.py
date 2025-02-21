@@ -236,6 +236,10 @@ class ModelArguments:
             "help": "Epsilon used for finite-difference gradient approximation in guidance calls."
         },
     )
+    diffusion_guidance_delay_epoch: int = field(
+        default=5,
+        metadata={"help": "Wait until this epoch to enable partial decode guidance."}
+    )
 
     def __post_init__(self):
         if self.config_overrides is not None and (

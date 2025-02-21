@@ -880,15 +880,13 @@ class InversionModel(transformers.PreTrainedModel):
         max_steps: int = 100000,
         **kwargs,
     ) -> DiffusionSeq2SeqLMOutput:
-        debug_print("---In forward()---")
+        
+        # ~~~ Normal T5 forward pass ~~~
         inputs_embeds, attention_mask = self.embed_and_project(
             embedder_input_ids=embedder_input_ids,
             embedder_attention_mask=embedder_attention_mask,
             frozen_embeddings=frozen_embeddings,
         )
-        debug_print(f"---forward() :: inputs_embeds.shape: {inputs_embeds.shape}---")
-        debug_print(f"---forward() :: attention_mask.shape: {attention_mask.shape}")
-
         seq2seq_outputs = self.encoder_decoder(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
@@ -897,27 +895,40 @@ class InversionModel(transformers.PreTrainedModel):
         )
 
         ce_loss = seq2seq_outputs.loss
+        total_loss = ce_loss
         diffusion_loss = None
 
-        # By default, if we didn't do diffusion, total_loss = ce_loss
-        total_loss = ce_loss  
-
-        # (A) SCHEDULING SETUP
+        # ~~~ 1) Basic schedule for CE vs. Diffusion weighting ~~~
         progress = min(float(train_step) / float(max_steps), 1.0)
 
-        # Example: 
-        #   CE from 2.0 -> 4.0 linearly over training
-        #   Diff from 1.0 -> 0.01 linearly
-        ce_weight_start, ce_weight_end = 2.0, 4.0
+        # e.g. CE from 1.0 -> 2.0 linearly
+        ce_weight_start, ce_weight_end = 1.0, 2.0
+        # e.g. Diff from 1.0 -> 0.01 linearly
         diff_weight_start, diff_weight_end = 1.0, 0.01
 
-        base_ce_weight = ce_weight_start + (ce_weight_end - ce_weight_start) * progress
-        base_diff_weight = diff_weight_start + (diff_weight_end - diff_weight_start) * progress
+        base_ce_weight = ce_weight_start + (ce_weight_end - ce_weight_start)*progress
+        base_diff_weight = diff_weight_start + (diff_weight_end - diff_weight_start)*progress
 
         if self.use_diffusion and self.training:
-            debug_print(f"---forward() :: Using diffusion and training---")
-            lat_mean = inputs_embeds.mean(dim=1, keepdim=True)
+            # ~~~ 2) Delay partial decode guidance if epoch < X ~~~
+            # We'll estimate the current epoch from train_step.
+            num_epochs = getattr(self.config, "num_train_epochs", 30.0)  # fallback
+            steps_per_epoch = max_steps / (num_epochs + 1e-7)
+            current_epoch = train_step / (steps_per_epoch + 1e-7)
 
+            # read from config or fallback to 5
+            delay_epoch = getattr(self.config, "diffusion_guidance_delay_epoch", 5)
+
+            # if we haven't reached 'delay_epoch', zero out guidance
+            if current_epoch < delay_epoch:
+                actual_guidance_scale = 0.0
+                actual_guidance_freq  = 999999999
+            else:
+                actual_guidance_scale = self.diffusion_training_guidance_scale
+                actual_guidance_freq  = self.diffusion_training_guidance_freq
+
+            # ~~~ call diffusion ~~~
+            lat_mean = inputs_embeds.mean(dim=1, keepdim=True)
             if not hasattr(self, "_diffusion_compress"):
                 self._diffusion_compress = nn.Linear(lat_mean.size(-1), self.latent_dim).to(self.device)
             z0 = self._diffusion_compress(lat_mean)
@@ -926,28 +937,18 @@ class InversionModel(transformers.PreTrainedModel):
                 z0,
                 t=None,
                 z_hat=None,
-                training_guidance_scale=self.diffusion_training_guidance_scale,
-                training_guidance_freq=self.diffusion_training_guidance_freq,
+                training_guidance_scale=actual_guidance_scale,
+                training_guidance_freq=actual_guidance_freq,
             )
             diffusion_loss = diff_loss
 
-            # (B) RATIO-BASED SCALING
-            # measure the raw magnitudes of each sub-loss:
-            ce_val   = ce_loss.detach().item() + 1e-7
-            diff_val = diffusion_loss.detach().item() + 1e-7
-
-            ratio = ce_val / diff_val
-            ratio_sqrt = ratio**0.5
-
-            # final weights
-            dynamic_ce_weight   = base_ce_weight * ratio_sqrt
-            dynamic_diff_weight = base_diff_weight / ratio_sqrt
-
-            total_loss = dynamic_ce_weight * ce_loss + dynamic_diff_weight * diffusion_loss
+            total_loss = base_ce_weight * ce_loss + base_diff_weight * diffusion_loss
 
         return DiffusionSeq2SeqLMOutput(
             loss=total_loss,
             logits=seq2seq_outputs.logits,
+            ce_loss=ce_loss,
+            diffusion_loss=diffusion_loss,
             past_key_values=seq2seq_outputs.past_key_values,
             decoder_hidden_states=seq2seq_outputs.decoder_hidden_states,
             decoder_attentions=seq2seq_outputs.decoder_attentions,
@@ -955,8 +956,6 @@ class InversionModel(transformers.PreTrainedModel):
             encoder_last_hidden_state=seq2seq_outputs.encoder_last_hidden_state,
             encoder_hidden_states=seq2seq_outputs.encoder_hidden_states,
             encoder_attentions=seq2seq_outputs.encoder_attentions,
-            ce_loss=ce_loss,
-            diffusion_loss=diffusion_loss,
         )
 
     def _decode_latent_to_text(self, latent: torch.Tensor) -> list:
