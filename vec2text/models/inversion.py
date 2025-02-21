@@ -943,7 +943,7 @@ class InversionModel(transformers.PreTrainedModel):
             diffusion_loss = diff_loss
 
             total_loss = base_ce_weight * ce_loss + base_diff_weight * diffusion_loss
-            print(f"progress: {progress} || base_ce_weight: {base_ce_weight} || ce_loss: {ce_loss} || base_diff_weight: {base_diff_weight} || diffusion_loss: {diffusion_loss} || total_loss: {total_loss}")
+            print(f"train_step: {train_step} || max_steps: {max_steps} || progress: {progress} || base_ce_weight: {base_ce_weight} || ce_loss: {ce_loss} || base_diff_weight: {base_diff_weight} || diffusion_loss: {diffusion_loss} || total_loss: {total_loss}")
 
         return DiffusionSeq2SeqLMOutput(
             loss=total_loss,
