@@ -23,7 +23,7 @@ class InversionTrainer(BaseTrainer):
     
     def compute_loss(self, model, inputs, return_outputs=False):
         current_step = self.state.global_step
-        total_steps  = self.args.max_steps
+        total_steps  = self.state.max_steps
 
         inputs["train_step"] = current_step
         inputs["max_steps"]  = total_steps
