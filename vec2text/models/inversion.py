@@ -638,6 +638,14 @@ class InversionModel(transformers.PreTrainedModel):
             nn.GELU(),
             nn.Linear(bottleneck_dim, encoder_hidden_dim * num_repeat_tokens),
         )
+        self._diffusion_compress = nn.Linear(encoder_hidden_dim, self.latent_dim)
+        self._diffusion_expand   = nn.Linear(self.latent_dim, encoder_hidden_dim)
+        self.latent_preproc = nn.Sequential(
+            nn.LayerNorm(self.embedder_dim),
+            nn.Linear(self.embedder_dim, self.embedder_dim),
+            nn.SiLU(),
+            nn.Linear(self.embedder_dim, self.embedder_dim),
+        )
         if encoder_dropout_disabled:
             disable_dropout(self.encoder_decoder.encoder)
         if decoder_dropout_disabled:
@@ -773,8 +781,7 @@ class InversionModel(transformers.PreTrainedModel):
         else:
             embeddings = self.call_embedding_model(embedder_input_ids, embedder_attention_mask)
 
-        # (3) Scale down latents to avoid huge reverse blowups
-        embeddings = 0.1 * embeddings  # or apply layernorm, etc.
+        embeddings = self.latent_preproc(embeddings)
 
         repeated_embeddings = self.embedding_transform(embeddings)
         B = repeated_embeddings.size(0)
@@ -801,8 +808,6 @@ class InversionModel(transformers.PreTrainedModel):
         debug_print(f'--inputs_embeds.shape: {inputs_embeds.shape}')
         lat_mean = inputs_embeds.mean(dim=1, keepdim=True)
 
-        if not hasattr(self, "_diffusion_compress"):
-            self._diffusion_compress = nn.Linear(lat_mean.size(-1), self.latent_dim).to(self.device)
         z0 = self._diffusion_compress(lat_mean)
 
         debug_print(f"--generate() :: z0: {z0}")
@@ -824,8 +829,6 @@ class InversionModel(transformers.PreTrainedModel):
             target_embedding=target_emb,
         )
 
-        if not hasattr(self, "_diffusion_expand"):
-            self._diffusion_expand = nn.Linear(self.latent_dim, lat_mean.size(-1)).to(self.device)
         expanded = self._diffusion_expand(x0).expand(-1, inputs_embeds.size(1), -1)
         debug_print(f"---expanded: {expanded}---")
 
@@ -901,10 +904,10 @@ class InversionModel(transformers.PreTrainedModel):
         # ~~~ 1) Basic schedule for CE vs. Diffusion weighting ~~~
         progress = min(float(train_step) / float(max_steps), 1.0)
 
-        # e.g. CE from 1.0 -> 2.0 linearly
-        ce_weight_start, ce_weight_end = 1.0, 2.0
-        # e.g. Diff from 1.0 -> 0.01 linearly
-        diff_weight_start, diff_weight_end = 1.0, 0.01
+        # Keep CE flat
+        ce_weight_start, ce_weight_end = 1.0, 1.0
+        # slowly ramp up diffusion importance
+        diff_weight_start, diff_weight_end = 0.1, 1.0
 
         base_ce_weight = ce_weight_start + (ce_weight_end - ce_weight_start)*progress
         base_diff_weight = diff_weight_start + (diff_weight_end - diff_weight_start)*progress
@@ -973,11 +976,9 @@ class InversionModel(transformers.PreTrainedModel):
         out_ids = self.encoder_decoder.generate(
             inputs_embeds=hidden,
             attention_mask=attn_mask,
-            max_new_tokens=40,
-            do_sample=True,
+            max_new_tokens=15,
+            do_sample=False,
             num_beams=1,
-            top_p=0.9,
-            top_k=50,
         )
         texts = self.tokenizer.batch_decode(out_ids, skip_special_tokens=True)
         return texts
