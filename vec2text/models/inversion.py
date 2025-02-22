@@ -638,14 +638,7 @@ class InversionModel(transformers.PreTrainedModel):
             nn.GELU(),
             nn.Linear(bottleneck_dim, encoder_hidden_dim * num_repeat_tokens),
         )
-        self._diffusion_compress = nn.Linear(encoder_hidden_dim, self.latent_dim)
-        self._diffusion_expand   = nn.Linear(self.latent_dim, encoder_hidden_dim)
-        self.latent_preproc = nn.Sequential(
-            nn.LayerNorm(self.embedder_dim),
-            nn.Linear(self.embedder_dim, self.embedder_dim),
-            nn.SiLU(),
-            nn.Linear(self.embedder_dim, self.embedder_dim),
-        )
+
         if encoder_dropout_disabled:
             disable_dropout(self.encoder_decoder.encoder)
         if decoder_dropout_disabled:
@@ -683,7 +676,15 @@ class InversionModel(transformers.PreTrainedModel):
         # possible other config fields
         self.diffusion_guidance_mode = getattr(config, "diffusion_guidance_mode", "cosine")
         self.diffusion_guidance_finite_diff_eps = getattr(config, "diffusion_guidance_finite_diff_eps", 1e-3)
-
+        
+        self._diffusion_compress = nn.Linear(encoder_hidden_dim, self.latent_dim)
+        self._diffusion_expand   = nn.Linear(self.latent_dim, encoder_hidden_dim)
+        self.latent_preproc = nn.Sequential(
+            nn.LayerNorm(self.embedder_dim),
+            nn.Linear(self.embedder_dim, self.embedder_dim),
+            nn.SiLU(),
+            nn.Linear(self.embedder_dim, self.embedder_dim),
+        )
         if self.use_diffusion:
             self.guided_diffusion = GuidedDiffusion(
                 parent_model=self,
