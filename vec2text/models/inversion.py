@@ -158,6 +158,8 @@ class GuidedDiffusion(nn.Module):
             num_heads=4,
         )
 
+        self.final_layernorm = nn.LayerNorm(latent_dim)
+
     def _parent(self) -> Optional[nn.Module]:
         return self._parent_ref()
 
@@ -350,6 +352,7 @@ class GuidedDiffusion(nn.Module):
             x0_pred = (x_t - (1 - alpha_bar).sqrt() * eps_pred) / (alpha_bar.sqrt() + 1e-7)
 
             x0_pred = self._percentile_dynamic_threshold(x0_pred, percentile=percentile)
+            x0_pred = self.final_layernorm(x0_pred)
             if i % 5 == 0:
                 print(
                     f"[p_sample_loop] step={i}, x0_pred min/mean/max: "
@@ -367,6 +370,7 @@ class GuidedDiffusion(nn.Module):
                     x0_pred, inference_guidance_scale, target_embedding
                 )
                 x0_pred = self._percentile_dynamic_threshold(x0_pred, percentile=percentile)
+                x0_pred = self.final_layernorm(x0_pred)
 
             z_hat = x0_pred.detach()
 
