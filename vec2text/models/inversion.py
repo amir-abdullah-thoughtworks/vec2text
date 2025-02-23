@@ -50,7 +50,7 @@ class CosineScheduler:
     with an additional clamp so that alpha = 1 - beta never exceeds 0.995.
     This avoids alpha being too close to 1.0.
     """
-    def __init__(self, timesteps: int = 50, beta_start: float = 1e-4, beta_end: float = 0.02):
+    def __init__(self, timesteps: int = 50, beta_start: float = 1e-4, beta_end: float = 1e-2):
         import math
         self.timesteps = timesteps
         betas = []
@@ -140,7 +140,7 @@ class GuidedDiffusion(nn.Module):
         self.guidance_mode = guidance_mode
         self.guidance_finite_diff_eps = guidance_finite_diff_eps
 
-        sched = CosineScheduler(timesteps, beta_start=1e-4, beta_end=0.02)
+        sched = CosineScheduler(timesteps, beta_start=1e-4, beta_end=1e-2)
         self.register_buffer("betas", sched.betas)
 
         alphas = 1.0 - sched.betas
