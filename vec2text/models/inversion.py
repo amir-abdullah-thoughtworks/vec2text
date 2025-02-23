@@ -729,6 +729,7 @@ class InversionModel(transformers.PreTrainedModel):
         self,
         inputs: Dict[str, torch.Tensor],
         generation_kwargs: Dict[str, torch.Tensor],
+        debug_compare_latents: bool = True,
     ) -> torch.Tensor:
         if not self.use_diffusion:
             debug_print("---Not using diffusion---")
@@ -743,12 +744,30 @@ class InversionModel(transformers.PreTrainedModel):
         lat_mean = inputs_embeds.mean(dim=1, keepdim=True)
 
         z0 = self._diffusion_compress(lat_mean)
-        debug_print(f"--generate() :: z0: {z0}")
         debug_print(f"--generate() :: z0 min/mean/max: {z0.min()}, {z0.mean()}, {z0.max()}")
 
+        ### ADDED #3a: decode z0 if debug
+        if debug_compare_latents:
+            expanded_init = self._diffusion_expand(z0)
+            attn_mask_init = torch.ones_like(expanded_init[..., 0], dtype=torch.long)
+            out_ids_init = self.encoder_decoder.generate(
+                inputs_embeds=expanded_init,
+                attention_mask=attn_mask_init,
+                max_new_tokens=30,
+                do_sample=False,
+                num_beams=1,
+            )
+            text_initial = self.tokenizer.batch_decode(out_ids_init, skip_special_tokens=True)
+            print("=== [generate debug] INITIAL LATENTS => DECODE ===")
+            print(f"z0: min={z0.min():.3f}, mean={z0.mean():.3f}, max={z0.max():.3f}")
+            if text_initial:
+                print(f"sample text_initial: {text_initial[0]}")
+            print("==============================================")
+
+        # partial noising => xT
         T = self.diffusion_timesteps
         noise = torch.randn_like(z0)
-        xT = self.guided_diffusion.q_sample(z0, t=T - 1, noise=noise)
+        xT = self.guided_diffusion.q_sample(z0, t=T-1, noise=noise)
 
         refine_steps = generation_kwargs.pop("refine_steps", T)
         target_emb = inputs.get("target_embedding", None)
@@ -760,13 +779,29 @@ class InversionModel(transformers.PreTrainedModel):
             target_embedding=target_emb,
         )
 
+        ### ADDED #3b: decode final latents if debug
+        if debug_compare_latents:
+            expanded_final = self._diffusion_expand(x0)
+            attn_mask_final = torch.ones_like(expanded_final[..., 0], dtype=torch.long)
+            out_ids_final = self.encoder_decoder.generate(
+                inputs_embeds=expanded_final,
+                attention_mask=attn_mask_final,
+                max_new_tokens=30,
+                do_sample=False,
+                num_beams=1,
+            )
+            text_final = self.tokenizer.batch_decode(out_ids_final, skip_special_tokens=True)
+            print("=== [generate debug] FINAL LATENTS => DECODE ===")
+            print(f"x0: min={x0.min():.3f}, mean={x0.mean():.3f}, max={x0.max():.3f}")
+            if text_final:
+                print(f"sample text_final: {text_final[0]}")
+            print("==============================================")
+
         expanded = self._diffusion_expand(x0).expand(-1, inputs_embeds.size(1), -1)
         debug_print(f"---expanded: {expanded}---")
 
         attention_mask = torch.ones(
-            (expanded.size(0), expanded.size(1)),
-            dtype=torch.long,
-            device=expanded.device,
+            (expanded.size(0), expanded.size(1)), dtype=torch.long, device=expanded.device
         )
         debug_print(f"---attention_mask: {attention_mask}---")
 
@@ -920,3 +955,4 @@ class InversionModel(transformers.PreTrainedModel):
         )
         texts = self.tokenizer.batch_decode(out_ids, skip_special_tokens=True)
         return texts
+
