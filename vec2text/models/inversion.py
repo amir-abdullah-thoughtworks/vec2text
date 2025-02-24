@@ -176,13 +176,18 @@ class GuidedDiffusion(nn.Module):
         z_hat: Optional[torch.Tensor] = None,
         training_guidance_scale: float = 0.0,
         training_guidance_freq: int = 99999999,
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Returns (diffusion_loss, x0_pred) so that calling code can
+        use x0_pred for additional losses, expansions, etc.
+        """
         B, L, D = z0.shape
         if t is None:
             t = torch.randint(0, self.timesteps, (B,), device=z0.device)
 
         noise = torch.randn_like(z0)
         z_t = self.q_sample(z0, t, noise=noise)
+
         if z_hat is None:
             z_hat = torch.zeros_like(z_t)
 
@@ -192,19 +197,28 @@ class GuidedDiffusion(nn.Module):
         v_pred = self.denoiser(z_t, z_hat, t)
         v_mse = F.mse_loss(v_pred, v_target)
 
+        # Convert v_pred => predicted noise => x0_pred
         pred_noise = (v_pred + (1 - alpha_bar).sqrt() * z0) / (alpha_bar.sqrt() + 1e-7)
         x0_pred = (z_t - (1 - alpha_bar).sqrt() * pred_noise) / (alpha_bar.sqrt() + 1e-7)
+
+        x0_pred = self._percentile_dynamic_threshold(x0_pred, percentile=0.995)
+
+        x0_pred = self.final_layernorm(x0_pred)
+
+        # Anchor loss after layernorm
         anchor_loss = F.mse_loss(x0_pred, z0)
 
         total_loss = v_mse + self.anchor_weight * anchor_loss
 
-        # partial-decode guidance
+        # Partial-decode guidance
         if (training_guidance_scale > 0.0) and (training_guidance_freq < 99999999):
-            x0_guided = self.apply_embedding_guidance_training(x0_pred, z0, training_guidance_scale)
+            x0_guided = self.apply_embedding_guidance_training(
+                x0_pred, z0, training_guidance_scale
+            )
             guidance_loss = self._compute_guidance_loss(x0_guided, z0)
             total_loss = total_loss + guidance_loss
 
-        return total_loss
+        return total_loss, x0_pred
 
     def apply_embedding_guidance_training(
         self,
@@ -370,7 +384,6 @@ class GuidedDiffusion(nn.Module):
                     x0_pred, inference_guidance_scale, target_embedding
                 )
                 x0_pred = self._percentile_dynamic_threshold(x0_pred, percentile=percentile)
-                x0_pred = self.final_layernorm(x0_pred)
 
             z_hat = x0_pred.detach()
 
@@ -783,7 +796,6 @@ class InversionModel(transformers.PreTrainedModel):
             target_embedding=target_emb,
         )
 
-        ### ADDED #3b: decode final latents if debug
         if debug_compare_latents:
             expanded_final = self._diffusion_expand(x0)
             attn_mask_final = torch.ones_like(expanded_final[..., 0], dtype=torch.long)
@@ -876,17 +888,15 @@ class InversionModel(transformers.PreTrainedModel):
         total_loss = ce_loss
         diffusion_loss = None
 
-        # Weighted schedule:
+        # Weighted schedule (same as you had)
         progress = min(float(train_step) / float(max_steps), 1.0)
-        # keep CE => 1.0, ramp diffusion => 0.1->1.0 over time
         ce_weight_start, ce_weight_end = 1.0, 1.0
         diff_weight_start, diff_weight_end = 0.1, 1.0
-
         base_ce_weight = ce_weight_start + (ce_weight_end - ce_weight_start) * progress
         base_diff_weight = diff_weight_start + (diff_weight_end - diff_weight_start) * progress
 
         if self.use_diffusion and self.training:
-            # figure out current epoch
+            # figure out current epoch (same logic you had)
             num_epochs = getattr(self.config, "num_train_epochs", 30.0)
             steps_per_epoch = max_steps / (num_epochs + 1e-7)
             current_epoch = train_step / (steps_per_epoch + 1e-7)
@@ -899,10 +909,12 @@ class InversionModel(transformers.PreTrainedModel):
                 actual_guidance_scale = self.diffusion_training_guidance_scale
                 actual_guidance_freq  = self.diffusion_training_guidance_freq
 
+            # Compress T5 input embeddings -> z0 for diffusion
             lat_mean = inputs_embeds.mean(dim=1, keepdim=True)
             z0 = self._diffusion_compress(lat_mean)
 
-            diff_loss = self.guided_diffusion(
+            # Instead of returning just "diff_loss", we now get both:
+            diff_loss, x0_pred = self.guided_diffusion(
                 z0,
                 t=None,
                 z_hat=None,
@@ -910,20 +922,42 @@ class InversionModel(transformers.PreTrainedModel):
                 training_guidance_freq=actual_guidance_freq,
             )
 
-            # ensures it’s also in the backward pass even if partial decode is zero
-            dummy_out = self._diffusion_expand(z0.detach())
-            # Add zero-scale so it doesn't affect final numeric result
-            diff_loss = diff_loss + (dummy_out.mean() * 0.0)
+            # 2a) Weighted sum of T5 CE + diffusion loss
+            diff_component = base_diff_weight * diff_loss
+            ce_component = base_ce_weight * ce_loss
 
-            diffusion_loss = diff_loss
-            total_loss = base_ce_weight * ce_loss + base_diff_weight * diff_loss
+            # 2b) Do an extra T5 pass on the final x0_pred
+            #     so that we train T5 from the diffusion latents too.
+            expanded_x0 = self._diffusion_expand(x0_pred)
+            attn_mask_x0 = torch.ones(
+                (expanded_x0.size(0), expanded_x0.size(1)), dtype=torch.long, device=expanded_x0.device
+            )
+            # teacher-forcing with the same labels
+            seq2seq_diff_out = self.encoder_decoder(
+                inputs_embeds=expanded_x0,
+                attention_mask=attn_mask_x0,
+                labels=labels,
+            )
+            # an additional CE that measures if final latents decode to the ground truth
+            ce_diff_loss = seq2seq_diff_out.loss
+
+            # Weighting very simply for now
+            second_ce_weight = 1.0  
+            diff_ce_component = base_diff_weight * second_ce_weight * ce_diff_loss
+
+            # Final total loss
+            total_loss = ce_component + diff_component + diff_ce_component
+
+            diffusion_loss = diff_loss  # store for logging
 
             print(
                 f"train_step: {train_step} || epoch={current_epoch:.2f} || progress={progress:.2f} "
-                f"|| base_ce_weight={base_ce_weight:.3f} || ce_loss={ce_loss:.4f} "
-                f"|| base_diff_weight={base_diff_weight:.3f} || diffusion_loss={diff_loss:.4f} "
+                f"|| ce_loss={ce_loss:.4f}  diff_loss={diff_loss:.4f}  diffCE={ce_diff_loss:.4f} "
                 f"|| total_loss={total_loss:.4f}"
             )
+        else:
+            # If not using diffusion or not in training, just do the normal CE
+            total_loss = ce_loss
 
         return DiffusionSeq2SeqLMOutput(
             loss=total_loss,
@@ -938,6 +972,7 @@ class InversionModel(transformers.PreTrainedModel):
             encoder_hidden_states=seq2seq_outputs.encoder_hidden_states,
             encoder_attentions=seq2seq_outputs.encoder_attentions,
         )
+
 
     def _decode_latent_to_text(self, latent: torch.Tensor) -> list:
         """
