@@ -201,7 +201,7 @@ class GuidedDiffusion(nn.Module):
         pred_noise = (v_pred + (1 - alpha_bar).sqrt() * z0) / (alpha_bar.sqrt() + 1e-7)
         x0_pred = (z_t - (1 - alpha_bar).sqrt() * pred_noise) / (alpha_bar.sqrt() + 1e-7)
 
-        x0_pred = self._percentile_dynamic_threshold(x0_pred, percentile=0.995)
+        #x0_pred = self._percentile_dynamic_threshold(x0_pred, percentile=0.995)
 
         x0_pred = self.final_layernorm(x0_pred)
 
@@ -365,7 +365,7 @@ class GuidedDiffusion(nn.Module):
             eps_pred = (v_pred + (1 - alpha_bar).sqrt() * x_t) / (alpha_bar.sqrt() + 1e-7)
             x0_pred = (x_t - (1 - alpha_bar).sqrt() * eps_pred) / (alpha_bar.sqrt() + 1e-7)
 
-            x0_pred = self._percentile_dynamic_threshold(x0_pred, percentile=percentile)
+            #x0_pred = self._percentile_dynamic_threshold(x0_pred, percentile=percentile)
             x0_pred = self.final_layernorm(x0_pred)
             if i % 5 == 0:
                 print(
@@ -383,7 +383,7 @@ class GuidedDiffusion(nn.Module):
                 x0_pred = self.apply_embedding_guidance(
                     x0_pred, inference_guidance_scale, target_embedding
                 )
-                x0_pred = self._percentile_dynamic_threshold(x0_pred, percentile=percentile)
+                #x0_pred = self._percentile_dynamic_threshold(x0_pred, percentile=percentile)
 
             z_hat = x0_pred.detach()
 
@@ -995,3 +995,4 @@ class InversionModel(transformers.PreTrainedModel):
         texts = self.tokenizer.batch_decode(out_ids, skip_special_tokens=True)
         return texts
 
+# I need to be able to estimate GPU capacity necessary for ultra-scale post training of transformer models. I want to come up with a series of equations/formulas that would allow us to ballpark GPU capacity necessary given some set of constraints. Please help me come up with these equations and the questions I'd need to ask to fill in some of the variables in order to do the estimation.
