@@ -942,7 +942,7 @@ class InversionModel(transformers.PreTrainedModel):
             ce_diff_loss = seq2seq_diff_out.loss
 
             # Weighting very simply for now
-            second_ce_weight = 2.0  
+            second_ce_weight = 10.0  
             diff_ce_component = base_diff_weight * second_ce_weight * ce_diff_loss
 
             # Final total loss
