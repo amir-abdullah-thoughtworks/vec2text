@@ -891,7 +891,7 @@ class InversionModel(transformers.PreTrainedModel):
         # Weighted schedule (same as you had)
         progress = min(float(train_step) / float(max_steps), 1.0)
         ce_weight_start, ce_weight_end = 1.0, 1.0
-        diff_weight_start, diff_weight_end = 0.1, 1.0
+        diff_weight_start, diff_weight_end = 1.0, 1.0
         base_ce_weight = ce_weight_start + (ce_weight_end - ce_weight_start) * progress
         base_diff_weight = diff_weight_start + (diff_weight_end - diff_weight_start) * progress
 
