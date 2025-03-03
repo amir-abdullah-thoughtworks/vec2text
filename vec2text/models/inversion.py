@@ -942,7 +942,7 @@ class InversionModel(transformers.PreTrainedModel):
             ce_diff_loss = seq2seq_diff_out.loss
 
             # Weighting very simply for now
-            second_ce_weight = 10.0  
+            second_ce_weight = 2.0  
             diff_ce_component = base_diff_weight * second_ce_weight * ce_diff_loss
 
             # Final total loss
@@ -994,5 +994,3 @@ class InversionModel(transformers.PreTrainedModel):
         )
         texts = self.tokenizer.batch_decode(out_ids, skip_special_tokens=True)
         return texts
-
-# I need to be able to estimate GPU capacity necessary for ultra-scale post training of transformer models. I want to come up with a series of equations/formulas that would allow us to ballpark GPU capacity necessary given some set of constraints. Please help me come up with these equations and the questions I'd need to ask to fill in some of the variables in order to do the estimation.
