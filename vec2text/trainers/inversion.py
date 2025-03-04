@@ -34,9 +34,9 @@ class InversionTrainer(BaseTrainer):
         ce_loss = outputs.ce_loss
 
         if diffusion_loss is not None:
-            self.log({"train/diffusion_loss": diffusion_loss.detach().item()})
+            self.log({"diffusion_loss": diffusion_loss.detach().item()})
         if ce_loss is not None:
-            self.log({"train/ce_loss": ce_loss.detach().item()})
+            self.log({"ce_loss": ce_loss.detach().item()})
         return (loss, outputs) if return_outputs else loss
 
     def training_step(
