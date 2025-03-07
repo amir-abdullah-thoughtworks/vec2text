@@ -813,7 +813,7 @@ class InversionModel(transformers.PreTrainedModel):
                 print(f"sample text_final: {text_final[0]}")
             print("==============================================")
 
-        expanded = self._diffusion_expand(x0).expand(-1, inputs_embeds.size(1), -1)
+        expanded = self._diffusion_expand(x0).expand(-1, inputs_embeds.size(1), -1).contiguous()
         debug_print(f"---expanded: {expanded}---")
 
         attention_mask = torch.ones(
