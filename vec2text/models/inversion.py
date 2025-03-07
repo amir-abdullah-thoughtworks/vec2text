@@ -21,6 +21,10 @@ from vec2text.utils import embed_api
 
 logger = logging.getLogger(__name__)
 
+# For debugging a stride issue
+torch.backends.cuda.enable_flash_sdp(False)
+torch.backends.cuda.enable_mem_efficient_sdp(False)
+torch.backends.cuda.enable_math_sdp(True)
 
 class InversionModel(transformers.PreTrainedModel):
     """A class of model that conditions on embeddings from a pre-trained sentence embedding model
