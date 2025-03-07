@@ -101,7 +101,7 @@ class SelfConditionedDenoiser(nn.Module):
 
         # time embedding
         t_emb = self.time_mlp(t.unsqueeze(-1).float())  # (B, time_embed_dim)
-        t_emb = t_emb.unsqueeze(1).expand(h.size(0), h.size(1), t_emb.size(-1))
+        t_emb = t_emb.unsqueeze(1).expand(h.size(0), h.size(1), t_emb.size(-1)).contiguous()
         if t_emb.size(-1) < h.size(-1):
             pad_dim = h.size(-1) - t_emb.size(-1)
             t_emb = F.pad(t_emb, (0, pad_dim), "constant", 0)
@@ -300,7 +300,7 @@ class GuidedDiffusion(nn.Module):
 
         lat_new = lat_mean + guidance_scale * best_update
         if L > 1:
-            lat_new = lat_new.expand(B, L, D)
+            lat_new = lat_new.expand(B, L, D).contiguous()
         return lat_new
 
     def _compute_guidance_loss(self, x0_pred: torch.Tensor, z0: torch.Tensor) -> torch.Tensor:
@@ -487,7 +487,7 @@ class GuidedDiffusion(nn.Module):
 
         lat_new = lat_mean + guidance_scale * best_update
         if L > 1:
-            lat_new_exp = lat_new.expand(B, L, D)
+            lat_new_exp = lat_new.expand(B, L, D).contiguous()
         else:
             lat_new_exp = lat_new
         return lat_new_exp
