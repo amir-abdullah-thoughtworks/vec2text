@@ -101,7 +101,7 @@ class SelfConditionedDenoiser(nn.Module):
 
         # time embedding
         t_emb = self.time_mlp(t.unsqueeze(-1).float())  # (B, time_embed_dim)
-        t_emb = t_emb.unsqueeze(1).expand(h.size(0), h.size(1), t_emb.size(-1)).contiguous()
+        t_emb = t_emb.unsqueeze(1).repeat(1, h.size(1), 1).contiguous()
         if t_emb.size(-1) < h.size(-1):
             pad_dim = h.size(-1) - t_emb.size(-1)
             t_emb = F.pad(t_emb, (0, pad_dim), "constant", 0)
@@ -300,7 +300,7 @@ class GuidedDiffusion(nn.Module):
 
         lat_new = lat_mean + guidance_scale * best_update
         if L > 1:
-            lat_new = lat_new.expand(B, L, D).contiguous()
+            lat_new = lat_new.repeat(1, L, 1).contiguous()
         return lat_new
 
     def _compute_guidance_loss(self, x0_pred: torch.Tensor, z0: torch.Tensor) -> torch.Tensor:
@@ -487,7 +487,7 @@ class GuidedDiffusion(nn.Module):
 
         lat_new = lat_mean + guidance_scale * best_update
         if L > 1:
-            lat_new_exp = lat_new.expand(B, L, D).contiguous()
+            lat_new_exp = lat_new.repeat(1, L, 1).contiguous()
         else:
             lat_new_exp = lat_new
         return lat_new_exp
@@ -813,7 +813,7 @@ class InversionModel(transformers.PreTrainedModel):
                 print(f"sample text_final: {text_final[0]}")
             print("==============================================")
 
-        expanded = self._diffusion_expand(x0).expand(-1, inputs_embeds.size(1), -1).contiguous()
+        expanded = self._diffusion_expand(x0).repeat(1, inputs_embeds.size(1), 1).contiguous()
         debug_print(f"---expanded: {expanded}---")
 
         attention_mask = torch.ones(
