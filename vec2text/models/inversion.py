@@ -28,9 +28,11 @@ from vec2text.utils import embed_api
 logger = logging.getLogger(__name__)
 
 # For debugging a stride mismatch issue
-torch.backends.cuda.enable_flash_sdp(False)
-torch.backends.cuda.enable_mem_efficient_sdp(False)
-torch.backends.cuda.enable_math_sdp(True)
+torch.backends.cuda.sdp_kernel(
+    enable_flash=False,
+    enable_mem_efficient=False,
+    enable_math=True
+)
 
 def is_main_process() -> bool:
     """Helper to check if we're on rank 0 when using torchrun --nproc_per_node."""
