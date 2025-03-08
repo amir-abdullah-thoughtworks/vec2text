@@ -64,7 +64,7 @@ class InversionTrainer(BaseTrainer):
         gen_outputs = model_to_use.generate(
             inputs={"frozen_embeddings": repeated_frozen_embs},
             generation_kwargs={
-                "max_new_tokens": 64,
+                "max_new_tokens": getattr(self.args, "max_seq_length", 128),
                 "do_sample": True,
                 "top_k": 50,
                 "top_p": 0.95,
