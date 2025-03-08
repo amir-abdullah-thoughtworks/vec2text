@@ -61,8 +61,8 @@ class InversionTrainer(BaseTrainer):
 
         # Generate text for each repeated embedding
         # unwrap DDP if needed:
-        model_to_generate = model.module if hasattr(model, "module") else model
-        gen_outputs = model_to_generate.generate(
+        model_to_use = model.module if hasattr(model, "module") else model
+        gen_outputs = model_to_use.generate(
             inputs={"frozen_embeddings": repeated_frozen_embs},
             generation_kwargs={
                 "max_new_tokens": 64,
@@ -72,7 +72,7 @@ class InversionTrainer(BaseTrainer):
                 # "temperature": 1.0,   # optional
             },
         )
-        gen_texts = model.tokenizer.batch_decode(gen_outputs, skip_special_tokens=True)
+        gen_texts = model_to_use.tokenizer.batch_decode(gen_outputs, skip_special_tokens=True)
 
         # Instead of embed_and_project, we simply embed the generated text with
         # model.call_embedding_model(...) which returns the final sentence embedding.
@@ -86,7 +86,7 @@ class InversionTrainer(BaseTrainer):
 
         with torch.no_grad():
             # Convert generated text back to input_ids
-            tokenized = model.tokenizer(
+            tokenized = model_to_use.tokenizer(
                 gen_texts,
                 padding=True,
                 truncation=True,
@@ -95,7 +95,7 @@ class InversionTrainer(BaseTrainer):
 
             # Now call call_embedding_model to get the final embedding
             # for each generated text.
-            gen_embs = model.call_embedding_model(
+            gen_embs = model_to_use.call_embedding_model(
                 input_ids=tokenized["input_ids"],
                 attention_mask=tokenized["attention_mask"],
             )
@@ -107,7 +107,7 @@ class InversionTrainer(BaseTrainer):
         # e.g.: rewards = 10.0 * rewards
 
         # Next, gather the log probs of each generated sample from the *current* model.
-        dec_inputs = model.tokenizer(
+        dec_inputs = model_to_use.tokenizer(
             gen_texts,
             padding=True,
             truncation=True,
@@ -129,7 +129,7 @@ class InversionTrainer(BaseTrainer):
         ).squeeze(-1)
 
         # Mask out the padding tokens
-        pad_mask = (dec_inputs["input_ids"] != model.tokenizer.pad_token_id).float()
+        pad_mask = (dec_inputs["input_ids"] != model_to_use.tokenizer.pad_token_id).float()
         chosen_logprobs = chosen_logprobs * pad_mask
         sum_logprobs = chosen_logprobs.sum(dim=-1)  # shape [B*N]
 
@@ -154,10 +154,10 @@ class InversionTrainer(BaseTrainer):
         else:
             return loss
 
-    def generate(self, inputs: Dict, generation_kwargs: Dict) -> torch.Tensor:
-        # If you ever call trainer.generate(...), route it to model.generate(...).
-        model_to_generate = self.model.module if hasattr(self.model, "module") else self.model
-        return model_to_generate.generate(inputs=inputs, generation_kwargs=generation_kwargs)
+    # def generate(self, inputs: Dict, generation_kwargs: Dict) -> torch.Tensor:
+    #     # If you ever call trainer.generate(...), route it to model.generate(...).
+    #     model_to_generate = self.model.module if hasattr(self.model, "module") else self.model
+    #     return model_to_generate.generate(inputs=inputs, generation_kwargs=generation_kwargs)
 
     def training_step(
         self, model: nn.Module, inputs: Dict[str, torch.Tensor], num_items_in_batch=None
