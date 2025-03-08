@@ -273,6 +273,24 @@ class TrainingArguments(transformers.TrainingArguments):
         default=False,
         metadata={"help": ("Whether to use bf16 (mixed) precision instead of 32-bit.")},
     )
+    use_rl: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "If True, run a reinforcement learning (GRPO-style) loop in compute_loss, "
+                "instead of standard cross-entropy."
+            )
+        },
+    )
+    rl_group_size: int = field(
+        default=4,
+        metadata={
+            "help": (
+                "Number of samples (N) to generate per input for advantage grouping in RL. "
+                "Only used if --use_rl is True."
+            )
+        },
+    )
     # torch_compile: bool = True # for torch 2
 
     ##################### Experimental Settings ####################
