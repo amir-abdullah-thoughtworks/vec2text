@@ -119,6 +119,8 @@ class InversionTrainer(BaseTrainer):
         # We'll pass repeated_frozen_embs as the T5 encoder input again,
         # plus dec_inputs["input_ids"] as the decoder tokens in forward()
         out = model(
+            embedder_input_ids=None,
+            embedder_attention_mask=None,
             frozen_embeddings=repeated_frozen_embs,
             decoder_input_ids=dec_inputs["input_ids"],
         )
