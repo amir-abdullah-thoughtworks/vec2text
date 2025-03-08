@@ -34,6 +34,8 @@ class InversionTrainer(BaseTrainer):
            - compute policy gradient loss = - sum( advantage * log_prob )
         """
 
+        print(f"INPUTS: {inputs}")
+
         # Check if we are in RL mode
         if not getattr(self.args, "use_rl", False):
             # =========================================
