@@ -79,7 +79,7 @@ class InversionTrainer(BaseTrainer):
         # Instead of embed_and_project, we simply embed the generated text with
         # model.call_embedding_model(...) which returns the final sentence embedding.
         repeated_target_embs = (
-            inputs["target_embeddings"]
+            inputs["frozen_embeddings"]
             .unsqueeze(1)
             .expand(batch_size, group_size, -1)
             .reshape(batch_size * group_size, -1)
