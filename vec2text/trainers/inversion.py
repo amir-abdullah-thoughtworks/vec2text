@@ -68,7 +68,7 @@ class InversionTrainer(BaseTrainer):
                 "do_sample": True,
                 "top_k": 50,
                 "top_p": 0.95,
-                # "temperature": 1.0,   # optional
+                "temperature": 1.0,
             },
         )
         gen_texts = model_to_use.tokenizer.batch_decode(gen_outputs, skip_special_tokens=True)
