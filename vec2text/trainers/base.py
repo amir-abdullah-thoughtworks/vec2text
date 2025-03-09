@@ -243,47 +243,57 @@ class BaseTrainer(transformers.Trainer):
         }
 
     def compute_metrics_func(self, eval_preds):
-        preds = eval_preds.predictions
-        labels = eval_preds.label_ids
-        max_len = getattr(self.model.config, "max_seq_length", 128)
-
-        pad_token_id = self.tokenizer.pad_token_id
-        pred_list = []
-
+        """
+        1. Convert eval_preds.predictions to torch tensors
+        2. For each sequence, if it's longer than label_seq_len, truncate
+            otherwise pad to match label_seq_len
+        3. Reshape and compute token-level accuracy
+        """
+        preds = eval_preds.predictions   # e.g. list/array of shape [N, seq_pred]
+        labels = eval_preds.label_ids    # array of shape [N, seq_label]
+        
+        # Convert labels to a torch tensor if it isn't already
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        labels = torch.tensor(labels, device=device)
+        assert labels.ndim == 2, f"Expected labels to have 2D shape, got {labels.shape}"
 
-        for p_ndarray in preds:
-            # Convert from NumPy array to PyTorch tensor
-            p = torch.tensor(p_ndarray, device=device)
-            
-            if p.size(0) < max_len:
-                pad_len = max_len - p.size(0)
-                # create [pad_len] of pad_token
+        # We'll align predictions to the label length
+        label_seq_len = labels.shape[1]
+
+        # Convert pad_token_id
+        pad_token_id = self.tokenizer.pad_token_id
+
+        pred_list = []
+        for p_np in preds:
+            # 1) Convert from NumPy array to PyTorch tensor
+            p = torch.tensor(p_np, device=device)
+
+            # 2) If p is longer than label_seq_len, truncate
+            if p.size(0) > label_seq_len:
+                p = p[:label_seq_len]
+            # 3) If p is shorter, pad
+            elif p.size(0) < label_seq_len:
+                pad_len = label_seq_len - p.size(0)
                 pad_seq = torch.full((pad_len,), pad_token_id, dtype=p.dtype, device=device)
                 p = torch.cat([p, pad_seq], dim=0)
 
             pred_list.append(p)
 
-        # Stack into a 2D tensor [num_samples, max_len]
-        preds = torch.stack(pred_list, dim=0)  # shape = [N, max_len]
-
-        assert len(labels), "got empty labels for eval"
-
-        labels = torch.tensor(labels, device=device)
-
-        # Now do the shape check
-        assert preds.shape == labels.shape, (
-            f"preds.shape {preds.shape} / labels.shape {labels.shape}"
+        # 4) Stack into shape [N, label_seq_len]
+        preds_tensor = torch.stack(pred_list, dim=0)
+        assert preds_tensor.shape == labels.shape, (
+            f"preds.shape {preds_tensor.shape} / labels.shape {labels.shape}"
         )
 
-        # Reshape to flatten
-        labels = labels.reshape(-1)
-        preds = preds.reshape(-1)
+        # Flatten for token-level metric
+        preds_flat = preds_tensor.view(-1)
+        labels_flat = labels.view(-1)
 
+        # compute accuracy
         accuracy_result = self.metric_accuracy.compute(
-            predictions=preds, references=labels
+            predictions=preds_flat, 
+            references=labels_flat
         )
-
         return {**accuracy_result}
 
     def _text_comparison_metrics(
