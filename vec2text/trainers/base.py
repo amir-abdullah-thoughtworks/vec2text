@@ -245,6 +245,19 @@ class BaseTrainer(transformers.Trainer):
     def compute_metrics_func(self, eval_preds):
         preds = eval_preds.predictions
         labels = eval_preds.label_ids
+        max_len = getattr(self.args.max_seq_length, 128)
+
+        pad_token_id = self.tokenizer.pad_token_id
+        pred_list = []
+
+        for p in preds:
+            if p.size(0) < max_len:
+                pad_len = max_len - p.size(0)
+                # create [pad_len] of pad_token
+                pad_seq = torch.full((pad_len,), pad_token_id, dtype=p.dtype, device=p.device)
+                p = torch.cat([p, pad_seq], dim=0)
+            pred_list.append(p)
+        preds = torch.stack(pred_list, dim=0)  # shape = [1000,max_len]
 
         assert len(labels), "got empty labels for eval"
         assert (
