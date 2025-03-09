@@ -245,7 +245,7 @@ class BaseTrainer(transformers.Trainer):
     def compute_metrics_func(self, eval_preds):
         preds = eval_preds.predictions
         labels = eval_preds.label_ids
-        max_len = getattr(self.args.max_seq_length, 128)
+        max_len = getattr(self.model.config.max_seq_length, 128)
 
         pad_token_id = self.tokenizer.pad_token_id
         pred_list = []
