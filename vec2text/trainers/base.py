@@ -510,6 +510,12 @@ class BaseTrainer(transformers.Trainer):
 
         Override to compute ppl from eval loss.
         """
+        # Temporarily store the old group_size
+        old_group_size = getattr(self.args, "rl_group_size", 4)
+    
+        # Override it with 1 for single-sample generation
+        self.args.rl_group_size = 1
+
         output = super().evaluation_loop(dataloader=dataloader, *args, **kwargs)
         metric_key_prefix = kwargs["metric_key_prefix"]
         # TODO compute some data metrics here too.
@@ -520,6 +526,8 @@ class BaseTrainer(transformers.Trainer):
                 f"{metric_key_prefix}_{k}": v for k, v in generation_metrics.items()
             }
             output.metrics.update(generation_metrics)
+        # Restore the old group_size so training or future eval isn’t affected
+        self.args.rl_group_size = old_group_size
         return output
 
     def _remap_state_dict(self, state_dict: Dict) -> Dict:
