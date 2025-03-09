@@ -251,6 +251,8 @@ class BaseTrainer(transformers.Trainer):
         pred_list = []
 
         for p in preds:
+            print(type(p))
+            print(p)
             if p.size(0) < max_len:
                 pad_len = max_len - p.size(0)
                 # create [pad_len] of pad_token
