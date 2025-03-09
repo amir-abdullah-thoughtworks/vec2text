@@ -155,10 +155,9 @@ class InversionTrainer(BaseTrainer):
         else:
             return loss
 
-    # def generate(self, inputs: Dict, generation_kwargs: Dict) -> torch.Tensor:
-    #     # If you ever call trainer.generate(...), route it to model.generate(...).
-    #     model_to_generate = self.model.module if hasattr(self.model, "module") else self.model
-    #     return model_to_generate.generate(inputs=inputs, generation_kwargs=generation_kwargs)
+    def generate(self, inputs: Dict, generation_kwargs: Dict) -> torch.Tensor:
+        model_to_generate = self.model.module if hasattr(self.model, "module") else self.model
+        return model_to_generate.generate(inputs=inputs, generation_kwargs=generation_kwargs)
 
     def training_step(
         self, model: nn.Module, inputs: Dict[str, torch.Tensor], num_items_in_batch=None
