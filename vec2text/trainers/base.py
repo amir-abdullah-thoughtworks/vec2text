@@ -250,25 +250,36 @@ class BaseTrainer(transformers.Trainer):
         pad_token_id = self.tokenizer.pad_token_id
         pred_list = []
 
-        for p in preds:
-            print(type(p))
-            print(p)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        for p_ndarray in preds:
+            # Convert from NumPy array to PyTorch tensor
+            p = torch.tensor(p_ndarray, device=device)
+            
             if p.size(0) < max_len:
                 pad_len = max_len - p.size(0)
                 # create [pad_len] of pad_token
-                pad_seq = torch.full((pad_len,), pad_token_id, dtype=p.dtype, device=p.device)
+                pad_seq = torch.full((pad_len,), pad_token_id, dtype=p.dtype, device=device)
                 p = torch.cat([p, pad_seq], dim=0)
+
             pred_list.append(p)
-        preds = torch.stack(pred_list, dim=0)  # shape = [1000,max_len]
+
+        # Stack into a 2D tensor [num_samples, max_len]
+        preds = torch.stack(pred_list, dim=0)  # shape = [N, max_len]
 
         assert len(labels), "got empty labels for eval"
-        assert (
-            torch.tensor(preds).shape == torch.tensor(labels).shape
-        ), f"preds.shape {preds.shape} / labels.shape {labels.shape}"
 
-        # preds have the same shape as the labels.
+        labels = torch.tensor(labels, device=device)
+
+        # Now do the shape check
+        assert preds.shape == labels.shape, (
+            f"preds.shape {preds.shape} / labels.shape {labels.shape}"
+        )
+
+        # Reshape to flatten
         labels = labels.reshape(-1)
         preds = preds.reshape(-1)
+
         accuracy_result = self.metric_accuracy.compute(
             predictions=preds, references=labels
         )
