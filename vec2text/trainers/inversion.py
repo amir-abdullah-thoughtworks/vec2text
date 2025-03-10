@@ -26,40 +26,34 @@ class InversionTrainer(BaseTrainer):
     ):
         """
         1) If self.args.use_rl is False => run normal cross-entropy (supervised).
-        2) If self.args.use_rl is True  => do a GRPO-style RL update:
-           - expand each embedding group_size times
-           - generate text with sampling
-           - re-embed generated text *via call_embedding_model(...)*
-           - compute advantage = reward - group_mean
-           - compute policy gradient loss = - sum( advantage * log_prob )
+        2) If self.args.use_rl is True => do a GRPO-style RL update + optional MLE anchor
         """
-        # Check if we are in RL mode
+
+        # (A) If not RL, do normal MLE
         if not getattr(self.args, "use_rl", False):
-            # =========================================
-            # Normal cross-entropy route
-            # =========================================
             return super().compute_loss(model, inputs, return_outputs=return_outputs)
 
-        # ================================================================
-        # RL / GRPO route
-        # ================================================================
+        # ─────────────────────────────────────────────────────────
+        # (B) RL Settings
+        # ─────────────────────────────────────────────────────────
         device = inputs["frozen_embeddings"].device
         batch_size = inputs["frozen_embeddings"].shape[0]
 
-        # 'group_size' determines how many times we sample per input
         group_size = getattr(self.args, "rl_group_size", 4)
+        temp = getattr(self.args, "rl_temperature", 1.0)
 
-        # Expand each embedding [B, embed_dim] -> [B*N, embed_dim]
+        # Expand each embedding => [B*N, embed_dim]
         repeated_frozen_embs = (
             inputs["frozen_embeddings"]
-            .unsqueeze(1)                              # [B,1,dim]
-            .expand(batch_size, group_size, -1)        # [B,N,dim]
-            .reshape(batch_size * group_size, -1)      # [B*N,dim]
+            .unsqueeze(1)
+            .expand(batch_size, group_size, -1)
+            .reshape(batch_size * group_size, -1)
             .to(device)
         )
 
-        # Generate text for each repeated embedding
-        # unwrap DDP if needed:
+        # ─────────────────────────────────────────────────────────
+        # (C) Generate text with sampling
+        # ─────────────────────────────────────────────────────────
         model_to_use = model.module if hasattr(model, "module") else model
         gen_outputs = model_to_use.generate(
             inputs={"frozen_embeddings": repeated_frozen_embs},
@@ -68,13 +62,14 @@ class InversionTrainer(BaseTrainer):
                 "do_sample": True,
                 "top_k": 50,
                 "top_p": 0.95,
-                "temperature": 1.0,
+                "temperature": temp,
             },
         )
         gen_texts = model_to_use.tokenizer.batch_decode(gen_outputs, skip_special_tokens=True)
 
-        # Instead of embed_and_project, we simply embed the generated text with
-        # model.call_embedding_model(...) which returns the final sentence embedding.
+        # ─────────────────────────────────────────────────────────
+        # (D) Reward from embedder
+        # ─────────────────────────────────────────────────────────
         repeated_target_embs = (
             inputs["frozen_embeddings"]
             .unsqueeze(1)
@@ -82,78 +77,82 @@ class InversionTrainer(BaseTrainer):
             .reshape(batch_size * group_size, -1)
             .to(device)
         )
-
         with torch.no_grad():
-            # Convert generated text back to input_ids
             tokenized = model_to_use.tokenizer(
-                gen_texts,
-                padding=True,
-                truncation=True,
-                return_tensors="pt",
+                gen_texts, padding=True, truncation=True, return_tensors="pt"
             ).to(device)
-
-            # Now call call_embedding_model to get the final embedding
-            # for each generated text.
             gen_embs = model_to_use.call_embedding_model(
                 input_ids=tokenized["input_ids"],
                 attention_mask=tokenized["attention_mask"],
             )
-            # shape: [B*N, embedder_dim]
-
-        # Cosine similarity => reward
         rewards = F.cosine_similarity(gen_embs, repeated_target_embs, dim=-1)
-        # Optionally scale the reward 
-        # e.g.: rewards = 10.0 * rewards
 
-        # Next, gather the log probs of each generated sample from the *current* model.
+        # ─────────────────────────────────────────────────────────
+        # (E) Log-probs from new policy
+        # ─────────────────────────────────────────────────────────
         dec_inputs = model_to_use.tokenizer(
-            gen_texts,
-            padding=True,
-            truncation=True,
-            return_tensors="pt",
+            gen_texts, padding=True, truncation=True, return_tensors="pt"
         ).to(device)
-
-        # We'll pass repeated_frozen_embs as the T5 encoder input again,
-        # plus dec_inputs["input_ids"] as the decoder tokens in forward()
         out = model(
             embedder_input_ids=None,
             embedder_attention_mask=None,
             frozen_embeddings=repeated_frozen_embs,
             decoder_input_ids=dec_inputs["input_ids"],
         )
-        logits = out.logits  # [B*N, seq_len, vocab_size]
+        logits = out.logits
         log_probs = F.log_softmax(logits, dim=-1)
 
-        # For each token in each sequence, gather log-prob of that token
         chosen_logprobs = log_probs.gather(
             -1, dec_inputs["input_ids"].unsqueeze(-1)
         ).squeeze(-1)
 
-        # Mask out the padding tokens
         pad_mask = (dec_inputs["input_ids"] != model_to_use.tokenizer.pad_token_id).float()
-        chosen_logprobs = chosen_logprobs * pad_mask
+        chosen_logprobs *= pad_mask
         sum_logprobs = chosen_logprobs.sum(dim=-1)  # shape [B*N]
 
-        # Group advantage => advantage_i = reward_i - mean_of_group
-        rewards_2d = rewards.view(batch_size, group_size)         # [B,N]
+        # Advantage
+        rewards_2d = rewards.view(batch_size, group_size)
         sum_logprobs_2d = sum_logprobs.view(batch_size, group_size)
 
-        group_mean = rewards_2d.mean(dim=1, keepdim=True)         # [B,1]
-        advantages_2d = rewards_2d - group_mean                   # [B,N]
-        advantages = advantages_2d.reshape(-1)                    # [B*N]
+        group_mean = rewards_2d.mean(dim=1, keepdim=True)
+        advantages_2d = rewards_2d - group_mean
+        advantages = advantages_2d.reshape(-1)
 
-        # Final GRPO loss = - sum( advantage * sum_logprobs )
         sum_logprobs_flat = sum_logprobs_2d.view(-1)
         pg_loss = -sum_logprobs_flat * advantages
-        loss = pg_loss.mean()
+        rl_loss = pg_loss.mean()  # RL objective
 
-        # Log average reward if desired
-        self.log({"train/avg_reward": rewards.mean().item()})
-
-        if return_outputs:
-            return (loss, {"logits": logits, "rewards": rewards})
+        # ─────────────────────────────────────────────────────────
+        # (F) MLE Anchor
+        # ─────────────────────────────────────────────────────────
+        mle_alpha = getattr(self.args, "mle_anchor_alpha", 0.01)
+        if "labels" in inputs:
+            # Do a forward pass in teacher-forcing mode with the original text
+            # so we compute cross-entropy
+            anchor_out = model(
+                embedder_input_ids=inputs["embedder_input_ids"],
+                embedder_attention_mask=inputs["embedder_attention_mask"],
+                labels=inputs["labels"],
+            )
+            mle_loss = anchor_out.loss  # cross-entropy from HF model
         else:
-            return loss
+            # If there's no "labels", we can't do MLE anchor
+            mle_loss = torch.zeros(1, device=device)
+
+        total_loss = rl_loss + mle_alpha * mle_loss
+
+        # (G) Logging
+        self.log({
+            "train/avg_reward": rewards.mean().item(),
+            "train/rl_loss": rl_loss.item(),
+            "train/mle_loss": mle_loss.item() if mle_loss.numel() > 0 else 0.0,
+        })
+
+        # Return final loss
+        if return_outputs:
+            return (total_loss, {"logits": logits, "rewards": rewards, "mle_loss": mle_loss})
+        else:
+            return total_loss
 
     def generate(self, inputs: Dict, generation_kwargs: Dict) -> torch.Tensor:
         model_to_generate = self.model.module if hasattr(self.model, "module") else self.model
