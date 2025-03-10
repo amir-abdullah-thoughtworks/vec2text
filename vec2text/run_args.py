@@ -291,6 +291,14 @@ class TrainingArguments(transformers.TrainingArguments):
             )
         },
     )
+    rl_temperature: float = field(
+        default=1.0,
+        metadata={"help": "Sampling temperature used for RL generation. Higher = more exploration."}
+    )
+    mle_anchor_alpha: float = field(
+        default=0.01,
+        metadata={"help": "Coefficient for the MLE anchor loss term in the final RL objective."}
+    )
     # torch_compile: bool = True # for torch 2
 
     ##################### Experimental Settings ####################
