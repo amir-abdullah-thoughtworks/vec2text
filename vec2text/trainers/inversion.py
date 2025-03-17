@@ -27,7 +27,7 @@ class InversionTrainer(BaseTrainer):
                 output_dir=getattr(self.args, "output_dir", "outputs/"),
                 logging_steps=10,
                 learning_rate=1e-5,
-                beta=0.2,
+                beta=getattr(self.args, "kl_coeff_beta", 0.2),
                 num_generations=getattr(self.args, "rl_num_generations", 4),
                 max_steps=getattr(self.args, "max_train_steps", 10000),
                 use_vllm=True,
@@ -60,11 +60,11 @@ class InversionTrainer(BaseTrainer):
             # Create the sub-trainer from TRL
             self._grpo_trainer = GRPOTrainer(
                 model=self.model,
-                tokenizer=self.tokenizer,
+                processing_class=self.tokenizer,
                 args=self._grpo_config,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
-                reward_fn=embedder_reward_fn,
+                reward_funcs=embedder_reward_fn,
                 generation_kwargs={
                     "max_new_tokens": getattr(self.args, "max_seq_length", 128),
                     "do_sample": True,

@@ -295,9 +295,9 @@ class TrainingArguments(transformers.TrainingArguments):
         default=1.0,
         metadata={"help": "Sampling temperature used for RL generation. Higher = more exploration."}
     )
-    mle_anchor_alpha: float = field(
-        default=0.01,
-        metadata={"help": "Coefficient for the MLE anchor loss term in the final RL objective."}
+    kl_coeff_beta: float = field(
+        default=0.2,
+        metadata={"help": "Coefficient for the KL Divergence calculation in GRPO."}
     )
     # torch_compile: bool = True # for torch 2
 
