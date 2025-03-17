@@ -30,8 +30,6 @@ class InversionTrainer(BaseTrainer):
                 beta=getattr(self.args, "kl_coeff_beta", 0.2),
                 num_generations=getattr(self.args, "rl_num_generations", 4),
                 max_steps=getattr(self.args, "max_train_steps", 10000),
-                top_k=50,
-                top_p=0.95,
                 temperature=getattr(self.args, "rl_temperature", 1.0),
                 max_completion_length=getattr(self.args, "max_seq_length", 128),
                 use_vllm=True,
