@@ -85,13 +85,13 @@ class InversionTrainer(BaseTrainer):
             return super().compute_loss(model, inputs, return_outputs=return_outputs)
 
         # RL path => rely entirely on GRPO
-        loss_dict = self._grpo_trainer.compute_loss(model, inputs, return_outputs=True)
+        loss_dict = self._grpo_trainer.compute_loss(model, inputs, return_outputs=False)
         rl_loss = loss_dict["loss"]
 
         # Optional: Log something about RL loss
         self.log({"train/rl_loss": rl_loss.item()})
 
-        if return_outputs:
+        if return_outputs and getattr(self.args, "use_rl", False) == False:
             return (rl_loss, loss_dict)
         else:
             return rl_loss
