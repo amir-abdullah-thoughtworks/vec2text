@@ -30,6 +30,10 @@ class InversionTrainer(BaseTrainer):
                 beta=getattr(self.args, "kl_coeff_beta", 0.2),
                 num_generations=getattr(self.args, "rl_num_generations", 4),
                 max_steps=getattr(self.args, "max_train_steps", 10000),
+                top_k=50,
+                top_p=0.95,
+                temperature=getattr(self.args, "rl_temperature", 1.0),
+                max_completion_length=getattr(self.args, "max_seq_length", 128),
                 use_vllm=True,
             )
 
@@ -66,11 +70,6 @@ class InversionTrainer(BaseTrainer):
                 eval_dataset=self.eval_dataset,
                 reward_funcs=embedder_reward_fn,
                 generation_kwargs={
-                    "max_new_tokens": getattr(self.args, "max_seq_length", 128),
-                    "do_sample": True,
-                    "top_k": 50,
-                    "top_p": 0.95,
-                    "temperature": getattr(self.args, "rl_temperature", 1.0),
                 },
             )
 
