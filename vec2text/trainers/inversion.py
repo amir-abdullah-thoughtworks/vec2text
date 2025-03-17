@@ -28,7 +28,7 @@ class InversionTrainer(BaseTrainer):
                 logging_steps=10,
                 learning_rate=1e-5,
                 kl_coeff=0.2,
-                num_generations=getattr(self.args, "rl_num_generations", 4)
+                num_generations=getattr(self.args, "rl_num_generations", 4),
                 max_steps=getattr(self.args, "max_train_steps", 10000),
                 use_vllm=True,
             )
