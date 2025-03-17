@@ -282,7 +282,7 @@ class TrainingArguments(transformers.TrainingArguments):
             )
         },
     )
-    rl_group_size: int = field(
+    rl_num_generations: int = field(
         default=4,
         metadata={
             "help": (

@@ -6,17 +6,73 @@ import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 
+from trl import GRPOTrainer, GRPOConfig
+
 from vec2text.trainers.base import BaseTrainer
 
 
 class InversionTrainer(BaseTrainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        ######################################################
+
         self.tokenizer = self.model.tokenizer
         self.embedder_tokenizer = self.model.embedder_tokenizer
         self.call_embedding_model = self.model.call_embedding_model
         self.embedder = self.model.embedder
+
+        # --- Only create a GRPO sub-trainer if RL is enabled
+        if getattr(self.args, "use_rl", False):
+            # Example GRPOConfig
+            self._grpo_config = GRPOConfig(
+                output_dir=getattr(self.args, "output_dir", "outputs/"),
+                logging_steps=10,
+                learning_rate=1e-5,
+                kl_coeff=0.2,
+                num_generations=getattr(self.args, "rl_num_generations", 4)
+                max_steps=getattr(self.args, "max_train_steps", 10000),
+                use_vllm=True,
+            )
+
+            # Reward function: compare generated text to "frozen_embeddings" via cos sim
+            def embedder_reward_fn(samples, prompts):
+                device = next(self.model.parameters()).device
+                with torch.no_grad():
+                    target_embs = []
+                    for p in prompts:
+                        # each "p" is a dict with "frozen_embeddings" from your dataset
+                        target_embs.append(p["frozen_embeddings"].to(device))
+                    target_embs = torch.stack(target_embs, dim=0)
+
+                    tokenized = self.tokenizer(
+                        samples, padding=True, truncation=True, return_tensors="pt"
+                    ).to(device)
+
+                    # forward pass through your embedder to get embeddings for the generated text
+                    gen_embs = self.call_embedding_model(
+                        input_ids=tokenized["input_ids"],
+                        attention_mask=tokenized["attention_mask"],
+                    )
+                    rewards = F.cosine_similarity(gen_embs, target_embs, dim=-1)
+
+                # Return as a Python list
+                return rewards.cpu().tolist()
+
+            # Create the sub-trainer from TRL
+            self._grpo_trainer = GRPOTrainer(
+                model=self.model,
+                tokenizer=self.tokenizer,
+                args=self._grpo_config,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
+                reward_fn=embedder_reward_fn,
+                generation_kwargs={
+                    "max_new_tokens": getattr(self.args, "max_seq_length", 128),
+                    "do_sample": True,
+                    "top_k": 50,
+                    "top_p": 0.95,
+                    "temperature": getattr(self.args, "rl_temperature", 1.0),
+                },
+            )
 
     def compute_loss(
         self,
@@ -25,134 +81,24 @@ class InversionTrainer(BaseTrainer):
         return_outputs: bool = False
     ):
         """
-        1) If self.args.use_rl is False => run normal cross-entropy (supervised).
-        2) If self.args.use_rl is True => do a GRPO-style RL update + optional MLE anchor
+        If use_rl=False => standard cross-entropy (supervised).
+        If use_rl=True  => delegate to GRPOTrainer's RL logic (no MLE anchor).
         """
-
-        # (A) If not RL, do normal MLE
         if not getattr(self.args, "use_rl", False):
+            # Normal cross-entropy path
             return super().compute_loss(model, inputs, return_outputs=return_outputs)
 
-        # ─────────────────────────────────────────────────────────
-        # (B) RL Settings
-        # ─────────────────────────────────────────────────────────
-        device = inputs["frozen_embeddings"].device
-        batch_size = inputs["frozen_embeddings"].shape[0]
+        # RL path => rely entirely on GRPO
+        loss_dict = self._grpo_trainer.compute_loss(model, inputs, return_outputs=True)
+        rl_loss = loss_dict["loss"]
 
-        group_size = getattr(self.args, "rl_group_size", 4)
-        temp = getattr(self.args, "rl_temperature", 1.0)
+        # Optional: Log something about RL loss
+        self.log({"train/rl_loss": rl_loss.item()})
 
-        # Expand each embedding => [B*N, embed_dim]
-        repeated_frozen_embs = (
-            inputs["frozen_embeddings"]
-            .unsqueeze(1)
-            .expand(batch_size, group_size, -1)
-            .reshape(batch_size * group_size, -1)
-            .to(device)
-        )
-
-        # ─────────────────────────────────────────────────────────
-        # (C) Generate text with sampling
-        # ─────────────────────────────────────────────────────────
-        model_to_use = model.module if hasattr(model, "module") else model
-        gen_outputs = model_to_use.generate(
-            inputs={"frozen_embeddings": repeated_frozen_embs},
-            generation_kwargs={
-                "max_new_tokens": getattr(self.args, "max_seq_length", 128),
-                "do_sample": True,
-                "top_k": 50,
-                "top_p": 0.95,
-                "temperature": temp,
-            },
-        )
-        gen_texts = model_to_use.tokenizer.batch_decode(gen_outputs, skip_special_tokens=True)
-
-        # ─────────────────────────────────────────────────────────
-        # (D) Reward from embedder
-        # ─────────────────────────────────────────────────────────
-        repeated_target_embs = (
-            inputs["frozen_embeddings"]
-            .unsqueeze(1)
-            .expand(batch_size, group_size, -1)
-            .reshape(batch_size * group_size, -1)
-            .to(device)
-        )
-        with torch.no_grad():
-            tokenized = model_to_use.tokenizer(
-                gen_texts, padding=True, truncation=True, return_tensors="pt"
-            ).to(device)
-            gen_embs = model_to_use.call_embedding_model(
-                input_ids=tokenized["input_ids"],
-                attention_mask=tokenized["attention_mask"],
-            )
-        rewards = F.cosine_similarity(gen_embs, repeated_target_embs, dim=-1)
-
-        # ─────────────────────────────────────────────────────────
-        # (E) Log-probs from new policy
-        # ─────────────────────────────────────────────────────────
-        dec_inputs = model_to_use.tokenizer(
-            gen_texts, padding=True, truncation=True, return_tensors="pt"
-        ).to(device)
-        out = model(
-            embedder_input_ids=None,
-            embedder_attention_mask=None,
-            frozen_embeddings=repeated_frozen_embs,
-            decoder_input_ids=dec_inputs["input_ids"],
-        )
-        logits = out.logits
-        log_probs = F.log_softmax(logits, dim=-1)
-
-        chosen_logprobs = log_probs.gather(
-            -1, dec_inputs["input_ids"].unsqueeze(-1)
-        ).squeeze(-1)
-
-        pad_mask = (dec_inputs["input_ids"] != model_to_use.tokenizer.pad_token_id).float()
-        chosen_logprobs *= pad_mask
-        sum_logprobs = chosen_logprobs.sum(dim=-1)  # shape [B*N]
-
-        # Advantage
-        rewards_2d = rewards.view(batch_size, group_size)
-        sum_logprobs_2d = sum_logprobs.view(batch_size, group_size)
-
-        group_mean = rewards_2d.mean(dim=1, keepdim=True)
-        advantages_2d = rewards_2d - group_mean
-        advantages = advantages_2d.reshape(-1)
-
-        sum_logprobs_flat = sum_logprobs_2d.view(-1)
-        pg_loss = -sum_logprobs_flat * advantages
-        rl_loss = pg_loss.mean()  # RL objective
-
-        # ─────────────────────────────────────────────────────────
-        # (F) MLE Anchor
-        # ─────────────────────────────────────────────────────────
-        mle_alpha = getattr(self.args, "mle_anchor_alpha", 0.01)
-        if "labels" in inputs:
-            # Do a forward pass in teacher-forcing mode with the original text
-            # so we compute cross-entropy
-            anchor_out = model(
-                embedder_input_ids=inputs["embedder_input_ids"],
-                embedder_attention_mask=inputs["embedder_attention_mask"],
-                labels=inputs["labels"],
-            )
-            mle_loss = anchor_out.loss  # cross-entropy from HF model
-        else:
-            # If there's no "labels", we can't do MLE anchor
-            mle_loss = torch.zeros(1, device=device)
-
-        total_loss = rl_loss + mle_alpha * mle_loss
-
-        # (G) Logging
-        self.log({
-            "train/avg_reward": rewards.mean().item(),
-            "train/rl_loss": rl_loss.item(),
-            "train/mle_loss": mle_loss.item() if mle_loss.numel() > 0 else 0.0,
-        })
-
-        # Return final loss
         if return_outputs:
-            return (total_loss, {"logits": logits, "rewards": rewards, "mle_loss": mle_loss})
+            return (rl_loss, loss_dict)
         else:
-            return total_loss
+            return rl_loss
 
     def generate(self, inputs: Dict, generation_kwargs: Dict) -> torch.Tensor:
         model_to_generate = self.model.module if hasattr(self.model, "module") else self.model
@@ -161,23 +107,13 @@ class InversionTrainer(BaseTrainer):
     def training_step(
         self, model: nn.Module, inputs: Dict[str, torch.Tensor], num_items_in_batch=None
     ) -> torch.Tensor:
-        """
-        Exactly as before: we log data-specific metrics, then rely on HF Trainer 
-        to call compute_loss behind the scenes.
-        """
         self._compute_data_metrics(inputs=inputs)
         return super().training_step(model, inputs)
 
     def evaluation_loop(
         self, *args, **kwargs
     ) -> transformers.trainer_utils.EvalLoopOutput:
-        """
-        Run evaluation and returns metrics.
-
-        Override to compute ppl from eval loss.
-        """
         output = super().evaluation_loop(*args, **kwargs)
-
         metric_key_prefix = kwargs["metric_key_prefix"]
         try:
             perplexity = math.exp(output.metrics[f"{metric_key_prefix}_loss"])
@@ -186,11 +122,9 @@ class InversionTrainer(BaseTrainer):
         except OverflowError:
             perplexity = float("inf")
         output.metrics[f"{metric_key_prefix}_perplexity"] = perplexity
-
         return output
 
     def _remap_state_dict(self, state_dict: Dict) -> Dict:
-        """Edit keys posthumously on model load."""
         if {
             "embedding_transform.2.weight",
             "embedding_transform.2.bias",
