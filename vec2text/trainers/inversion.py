@@ -32,7 +32,6 @@ class InversionTrainer(BaseTrainer):
                 max_steps=getattr(self.args, "max_train_steps", 10000),
                 temperature=getattr(self.args, "rl_temperature", 1.0),
                 max_completion_length=getattr(self.args, "max_seq_length", 128),
-                use_vllm=True,
             )
 
             # Reward function: compare generated text to "frozen_embeddings" via cos sim
