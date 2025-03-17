@@ -62,7 +62,6 @@ class InversionTrainer(BaseTrainer):
             # Create the sub-trainer from TRL
             self._grpo_trainer = GRPOTrainer(
                 model=self.model,
-                processing_class=self.tokenizer,
                 args=self._grpo_config,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
