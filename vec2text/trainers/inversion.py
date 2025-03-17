@@ -73,7 +73,8 @@ class InversionTrainer(BaseTrainer):
         self,
         model: nn.Module,
         inputs: Dict[str, torch.Tensor],
-        return_outputs: bool = False
+        return_outputs: bool = False,
+        num_items_in_batch: Optional[int] = None,
     ):
         """
         If use_rl=False => standard cross-entropy (supervised).
