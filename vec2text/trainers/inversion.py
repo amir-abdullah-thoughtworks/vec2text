@@ -67,8 +67,6 @@ class InversionTrainer(BaseTrainer):
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
                 reward_funcs=embedder_reward_fn,
-                generation_kwargs={
-                },
             )
 
     def compute_loss(
