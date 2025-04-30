@@ -11,7 +11,6 @@ from vec2text.trainers.base import BaseTrainer
 class InversionTrainer(BaseTrainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
         ######################################################
         self.tokenizer = self.model.tokenizer
         self.embedder_tokenizer = self.model.embedder_tokenizer
@@ -20,24 +19,6 @@ class InversionTrainer(BaseTrainer):
 
     def generate(self, inputs: Dict, generation_kwargs: Dict) -> torch.Tensor:
         return self.model.generate(inputs=inputs, generation_kwargs=generation_kwargs)
-    
-    def compute_loss(self, model, inputs, return_outputs=False):
-        current_step = self.state.global_step
-        total_steps  = self.state.max_steps
-
-        inputs["train_step"] = current_step
-        inputs["max_steps"]  = total_steps
-
-        outputs = model(**inputs)
-        loss = outputs.loss
-        diffusion_loss = outputs.diffusion_loss
-        ce_loss = outputs.ce_loss
-
-        if diffusion_loss is not None:
-            self.log({"diffusion_loss": diffusion_loss.detach().item()})
-        if ce_loss is not None:
-            self.log({"ce_loss": ce_loss.detach().item()})
-        return (loss, outputs) if return_outputs else loss
 
     def training_step(
         self, model: nn.Module, inputs: Dict[str, torch.Tensor], num_items_in_batch=None
