@@ -182,64 +182,12 @@ class ModelArguments:
     )
     use_diffusion: bool = field(
         default=False,
-        metadata={"help": "Whether to enable guided diffusion in the InversionModel."},
+        metadata={"help": "Whether to enable discrete diffusion in the InversionModel."},
     )
-    diffusion_training_guidance_scale: float = field(
-        default=0.0,
-        metadata={
-            "help": "Scale for training-time guidance calls to the embedder API. 0 means no training guidance."
-        },
-    )
-    diffusion_training_guidance_freq: int = field(
-        default=999999999,
-        metadata={
-            "help": "Frequency (in steps) for partial decode & embed calls during training. Large => rarely or never."
-        },
-    )
-    diffusion_inference_guidance_scale: float = field(
-        default=0.0,
-        metadata={
-            "help": "Scale for inference-time guidance calls. 0 => no guidance at inference."
-        },
-    )
-    diffusion_inference_guidance_freq: int = field(
-        default=999999999,
-        metadata={
-            "help": "Frequency of partial decode & embed calls in the reverse diffusion loop at inference."
-        },
-    )
-    diffusion_timesteps: int = field(
-        default=50,
-        metadata={"help": "Number of diffusion timesteps if use_diffusion=True."},
-    )
-    diffusion_anchor_weight: float = field(
-        default=0.01,
-        metadata={
-            "help": "Weight for anchor loss in diffusion training (keeps latents near original z0)."
-        },
-    )
-    latent_dim: int = field(
-        default=256,
-        metadata={
-            "help": "Dimensionality of the single-vector latent used by the diffusion submodule."
-        },
-    )
-    diffusion_guidance_mode: str = field(
-        default="cosine",
-        metadata={
-            "help": "Metric for embedding guidance. e.g. 'cosine' or 'mse'."
-        },
-    )
-    diffusion_guidance_finite_diff_eps: float = field(
-        default=1e-3,
-        metadata={
-            "help": "Epsilon used for finite-difference gradient approximation in guidance calls."
-        },
-    )
-    diffusion_guidance_delay_epoch: int = field(
-        default=5,
-        metadata={"help": "Wait until this epoch to enable partial decode guidance."}
-    )
+    diffusion_num_candidates: int = field(
+        default=1,
+        metadata={"help": "Number of candidates to be generated as part of the diffusion workflow."}
+    ) 
 
     def __post_init__(self):
         if self.config_overrides is not None and (
