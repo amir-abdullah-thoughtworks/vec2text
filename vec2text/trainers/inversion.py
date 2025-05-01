@@ -16,6 +16,24 @@ class InversionTrainer(BaseTrainer):
         self.embedder_tokenizer = self.model.embedder_tokenizer
         self.call_embedding_model = self.model.call_embedding_model
         self.embedder = self.model.embedder
+    
+    # ------------------------------------------------------------------
+    # log per-component losses coming from InversionModel.forward
+    # ------------------------------------------------------------------
+    def compute_loss(self, model, inputs, return_outputs=False):
+        """
+        Runs the usual forward pass (so uncertainty weighting happens inside
+        the model) and logs raw & weighted losses.
+        """
+        outputs = model(**inputs)
+        loss    = outputs.loss
+
+        if hasattr(outputs, "extra_losses"):
+            log_dict = {k: v.item() for k, v in outputs.extra_losses.items()}
+            # Trainer.log takes care of sync-dist if required.
+            self.log(log_dict, prog_bar=False, logger=True)
+
+        return (loss, outputs) if return_outputs else loss
 
     def generate(self, inputs: Dict, generation_kwargs: Dict) -> torch.Tensor:
         return self.model.generate(inputs=inputs, generation_kwargs=generation_kwargs)

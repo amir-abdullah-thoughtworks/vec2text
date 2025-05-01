@@ -355,4 +355,14 @@ class InversionModel(transformers.PreTrainedModel):
             )
             dec_out.loss = loss
 
+            dec_out.extra_losses = {
+                "ce_loss"      : dec_out.loss.detach(),
+                "emb_loss"     : l_emb.detach(),
+                "nce_loss"     : l_nce.detach(),
+                "margin_loss"  : l_margin.detach(),
+                "logvar_emb"   : self.loss_logvars["emb"].detach(),
+                "logvar_nce"   : self.loss_logvars["nce"].detach(),
+                "logvar_margin": self.loss_logvars["margin"].detach(),
+            }
+
         return dec_out
