@@ -33,7 +33,7 @@ class InversionTrainer(BaseTrainer):
             log_dict = {k: v.item() for k, v in outputs.extra_losses.items()}
             print(f"{log_dict}")
             # Trainer.log takes care of sync-dist if required.
-            self.log(log_dict, prog_bar=False, logger=True)
+            self.log(log_dict)
 
         return (loss, outputs) if return_outputs else loss
 
