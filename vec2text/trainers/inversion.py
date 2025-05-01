@@ -20,7 +20,7 @@ class InversionTrainer(BaseTrainer):
     # ------------------------------------------------------------------
     # log per-component losses coming from InversionModel.forward
     # ------------------------------------------------------------------
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
         Runs the usual forward pass (so uncertainty weighting happens inside
         the model) and logs raw & weighted losses.
