@@ -178,6 +178,12 @@ class InversionModel(transformers.PreTrainedModel):
         self.tokenizer = tokenizer
         self.embedder = embedder
         self.embedder_tokenizer = embedder_tok
+        # freeze embedder if requested
+        self.embedder_no_grad = getattr(config, "embedder_no_grad", True)
+        if self.embedder_no_grad:
+            for p in self.embedder.parameters():
+                p.requires_grad = False
+            self.embedder.eval()
         self.embedder_model_api = config.embedder_model_api
         self.embedder_dim = 1536 if self.embedder_model_api else (
             embedder.get_sentence_embedding_dimension()
