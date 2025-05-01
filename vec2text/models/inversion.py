@@ -89,13 +89,9 @@ class DiffusionSampler(nn.Module):
     ):
         super().__init__()
 
-        import weakref
-
         self._call_embed = inv_model.call_embedding_model  # function handle
         self.tokenizer = inv_model.tokenizer               # not an nn.Module
         self.embedder_tokenizer = inv_model.embedder_tokenizer
-        # store weak proxy so we don't register a sub‑module and create cycles
-        self._parent = weakref.proxy(inv_model)
 
         # hyper‑params
         self.num_steps = num_steps
