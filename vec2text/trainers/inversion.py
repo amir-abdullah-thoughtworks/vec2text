@@ -28,16 +28,12 @@ class InversionTrainer(BaseTrainer):
         outputs = model(**inputs)
         loss    = outputs.loss
 
-        log_dict = {
-            "emb_loss": outputs.emb_loss,
-            "nce_loss": outputs.nce_loss,
-            "margin_loss": outputs.margin_loss,
-            "logvar_emb": outputs.logvar_emb,
-            "logvar_nce": outputs.logvar_nce,
-            "logvar_margin": outputs.logvar_margin,
-        }
-        # Trainer.log takes care of sync-dist if required.
-        self.log(log_dict, prog_bar=False, logger=True)
+        if hasattr(outputs, "extra_losses"):
+            print("Has extra losses. Printing.")
+            log_dict = {k: v.item() for k, v in outputs.extra_losses.items()}
+            print(f"{log_dict}")
+            # Trainer.log takes care of sync-dist if required.
+            self.log(log_dict, prog_bar=False, logger=True)
 
         return (loss, outputs) if return_outputs else loss
 

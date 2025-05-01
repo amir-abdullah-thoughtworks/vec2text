@@ -8,6 +8,8 @@ from typing import Dict, Optional, Tuple
 import torch
 import torch.nn as nn
 import transformers
+from transformers.modeling_outputs import Seq2SeqLMOutput
+from dataclasses import dataclass
 from sentence_transformers import SentenceTransformer
 
 from vec2text.models.config import InversionConfig
@@ -23,6 +25,10 @@ from vec2text.models.model_utils import (
 from vec2text.utils import embed_api
 
 logger = logging.getLogger(__name__)
+
+@dataclass
+class InvOutput(Seq2SeqLMOutput):
+    extra_losses: Dict[str, torch.Tensor] = None
 
 # ===========================================================================
 # Diffusion utilities -------------------------------------------------------
@@ -311,7 +317,7 @@ class InversionModel(transformers.PreTrainedModel):
         )
 
         loss = dec_out.loss # cross-entropy
-
+        extra_losses = {}
         # ============ auxiliary losses (train mode only) =================
         if self.training and labels is not None:
             B, D = frozen_embeddings.size()
@@ -355,11 +361,16 @@ class InversionModel(transformers.PreTrainedModel):
             )
             dec_out.loss = loss
 
-            dec_out.emb_loss     = l_emb
-            dec_out.nce_loss     = l_nce
-            dec_out.margin_loss  = l_margin
-            dec_out.logvar_emb   = self.loss_logvars["emb"]
-            dec_out.logvar_nce   = self.loss_logvars["nce"]
-            dec_out.logvar_margin= self.loss_logvars["margin"]
-
-        return dec_out
+            extra_losses = {
+                "ce_loss"      : dec_out.loss.detach(),
+                "emb_loss"     : l_emb.detach(),
+                "nce_loss"     : l_nce.detach(),
+                "margin_loss"  : l_margin.detach(),
+                "logvar_emb"   : self.loss_logvars["emb"].detach(),
+                "logvar_nce"   : self.loss_logvars["nce"].detach(),
+                "logvar_margin": self.loss_logvars["margin"].detach(),
+            }
+        output = InvOutput(**dec_out.to_dict(), extra_losses=extra)
+        print(f"keys in output from forward(): {output.keys()}")
+        print(f"accessing output.extra_losses in forward(): {output.extra_losses}")
+        return output
