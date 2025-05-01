@@ -88,17 +88,25 @@ class DiffusionSampler(nn.Module):
         num_candidates_default: int = 1,
     ):
         super().__init__()
-        self.inv = inv_model
-        self.tokenizer = inv_model.tokenizer
+
+        import weakref
+
+        self._call_embed = inv_model.call_embedding_model  # function handle
+        self.tokenizer = inv_model.tokenizer               # not an nn.Module
         self.embedder_tokenizer = inv_model.embedder_tokenizer
+        # store weak proxy so we don't register a sub‑module and create cycles
+        self._parent = weakref.proxy(inv_model)
+
+        # hyper‑params
         self.num_steps = num_steps
         self.guidance_scale = guidance_scale
         self.num_candidates_default = num_candidates_default
         self.device = next(inv_model.parameters()).device
 
-        # Denoiser network
+        # denoiser network
         self.denoiser = TransformerDenoiser(self.tokenizer.vocab_size).to(self.device)
-        # Assume linear β schedule → deterministic DDIM
+
+        # simple linear beta schedule  → deterministic DDIM
         self.register_buffer(
             "betas", torch.linspace(0.0001, 0.9, num_steps, dtype=torch.float32)
         )
