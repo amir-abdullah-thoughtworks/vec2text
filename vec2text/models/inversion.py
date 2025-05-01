@@ -261,3 +261,26 @@ class InversionModel(transformers.PreTrainedModel):
             return seq
         else:
             return self.generate_greedy(frozen_embeddings=frozen, **generation_kwargs)
+    
+    def forward(
+        self,
+        embedder_input_ids: Optional[torch.Tensor] = None,
+        embedder_attention_mask: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        frozen_embeddings: Optional[torch.Tensor] = None,
+        decoder_input_ids: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> Dict[str, torch.Tensor]:
+        """Default training-forward path (always autoregressive)."""
+        # Unused: input_ids, attention_mask
+        inputs_embeds, attention_mask = self.embed_and_project(
+            embedder_input_ids=embedder_input_ids,
+            embedder_attention_mask=embedder_attention_mask,
+            frozen_embeddings=frozen_embeddings,
+        )
+        return self.encoder_decoder(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            labels=labels,
+            decoder_input_ids=decoder_input_ids,
+        )
