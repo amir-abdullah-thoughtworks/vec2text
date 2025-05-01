@@ -312,8 +312,6 @@ class InversionModel(transformers.PreTrainedModel):
 
         loss = dec_out.loss # cross-entropy
 
-        dec_out.extra_losses = {}
-
         # ============ auxiliary losses (train mode only) =================
         if self.training and labels is not None:
             B, D = frozen_embeddings.size()
@@ -357,16 +355,11 @@ class InversionModel(transformers.PreTrainedModel):
             )
             dec_out.loss = loss
 
-            dec_out.extra_losses = {
-                "ce_loss"      : dec_out.loss.detach(),
-                "emb_loss"     : l_emb.detach(),
-                "nce_loss"     : l_nce.detach(),
-                "margin_loss"  : l_margin.detach(),
-                "logvar_emb"   : self.loss_logvars["emb"].detach(),
-                "logvar_nce"   : self.loss_logvars["nce"].detach(),
-                "logvar_margin": self.loss_logvars["margin"].detach(),
-            }
+            dec_out.emb_loss     = l_emb
+            dec_out.nce_loss     = l_nce
+            dec_out.margin_loss  = l_margin
+            dec_out.logvar_emb   = self.loss_logvars["emb"]
+            dec_out.logvar_nce   = self.loss_logvars["nce"]
+            dec_out.logvar_margin= self.loss_logvars["margin"]
 
-        print(f"keys in dec_out from forward(): {dec_out.keys()}")
-        print(f"accessing dec_out.extra_losses in forward(): {dec_out.extra_losses}")
         return dec_out
