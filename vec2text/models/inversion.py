@@ -273,7 +273,7 @@ class InversionModel(transformers.PreTrainedModel):
     ) -> Dict[str, torch.Tensor]:
         """Default training-forward path (always autoregressive)."""
         # Unused: input_ids, attention_mask
-        inputs_embeds, attention_mask = self.embed_and_project(
+        inputs_embeds, attention_mask = self._embed_and_project(
             embedder_input_ids=embedder_input_ids,
             embedder_attention_mask=embedder_attention_mask,
             frozen_embeddings=frozen_embeddings,
