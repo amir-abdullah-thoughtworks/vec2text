@@ -312,7 +312,11 @@ class InversionModel(transformers.PreTrainedModel):
 
         loss = dec_out.loss # cross-entropy
 
+        dec_out.extra_losses = {}
+
         # ============ auxiliary losses (train mode only) =================
+        print(f"Training?: {self.training}")
+        print(f"Labels?: {labels}")
         if self.training and labels is not None:
             B, D = frozen_embeddings.size()
             pad_id = self.tokenizer.pad_token_id
