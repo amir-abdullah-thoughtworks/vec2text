@@ -29,15 +29,11 @@ class InversionTrainer(BaseTrainer):
         loss    = outputs.loss
 
         if hasattr(outputs, "extra_losses"):
+            print("Has extra losses. Printing.")
             log_dict = {k: v.item() for k, v in outputs.extra_losses.items()}
+            print(f"{log_dict}")
             # Trainer.log takes care of sync-dist if required.
             self.log(log_dict, prog_bar=False, logger=True)
-        # Stash for trainer-level logging later
-        if hasattr(outputs, "extra_losses"):
-            self._last_extra_logs = {k: v.item()
-                                     for k, v in outputs.extra_losses.items()}
-        else:
-            self._last_extra_logs = {}
 
         return (loss, outputs) if return_outputs else loss
 
@@ -50,15 +46,10 @@ class InversionTrainer(BaseTrainer):
         """
         Performs a training step. we override to compute data-specific metrics.
         """
+        # TODO: Log training metrics from below... (How to do with huggingface?)
         self._compute_data_metrics(inputs=inputs)
-        # ---- call HF Trainer to run forward/backward ---------------
-        loss = super().training_step(model, inputs)
-
-        # merge our extras with whatever Trainer already logged
-        prefixed = {f"train/{k}": v for k, v in self._last_extra_logs.items()}
-        self.log(prefixed)
-
-        return loss
+        # self.log({ f"train/{k}": v for k,v in metrics.items() })
+        return super().training_step(model, inputs)
 
     def evaluation_loop(
         self, *args, **kwargs
