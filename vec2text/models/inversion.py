@@ -264,6 +264,7 @@ class InversionModel(transformers.PreTrainedModel):
     
     def forward(
         self,
+        *,
         embedder_input_ids: Optional[torch.Tensor] = None,
         embedder_attention_mask: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
@@ -273,14 +274,16 @@ class InversionModel(transformers.PreTrainedModel):
     ) -> Dict[str, torch.Tensor]:
         """Default training-forward path (always autoregressive)."""
         # Unused: input_ids, attention_mask
-        inputs_embeds, attention_mask = self._embed_and_project(
-            embedder_input_ids=embedder_input_ids,
-            embedder_attention_mask=embedder_attention_mask,
-            frozen_embeddings=frozen_embeddings,
-        )
+        if frozen_embeddings is None:
+            assert embedder_input_ids is not None, "Need embedder_input_ids when frozen_embeddings absent"
+            frozen_embeddings = self.call_embedding_model(
+                input_ids=embedder_input_ids,
+                attention_mask=embedder_attention_mask,
+            )
+        embeds, attn = self._embed_and_project(frozen_embeddings=frozen_embeddings)
         return self.encoder_decoder(
-            inputs_embeds=inputs_embeds,
-            attention_mask=attention_mask,
+            inputs_embeds=embeds,
+            attention_mask=attn,
             labels=labels,
             decoder_input_ids=decoder_input_ids,
         )
