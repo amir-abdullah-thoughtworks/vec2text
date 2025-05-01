@@ -195,6 +195,26 @@ class ModelArguments:
     diffusion_num_steps: int = field(
         default=20,
         metadata={"help": "Number of steps to take in diffusion process."}
+    )
+    lambda_emb: float = field(
+        default=1.0,
+        metadata={"help": "Starting point for embedding loss coefficient. Scaling will be learned."}
+    )
+    lambda_nce: float = field(
+        default=1.0,
+        metadata={"help": "Starting point for in-batch InfoNCE coefficient. Scaling will be learned."}
+    )
+    lambda_margin: float = field(
+        default=1.0,
+        metadata={"help": "Starting point for bottleneck-margin coefficient. Scaling will be learned."}
+    )
+    margin_m: float = field(
+        default=0.2,
+        metadata={"help": "Margin used in the hinge loss."}
+    ) 
+    nce_temperature: float = field(
+        default=0.07,
+        metadata={"help": "Softmax temperature in the in-batch InfoNCE loss."}
     ) 
 
     def __post_init__(self):

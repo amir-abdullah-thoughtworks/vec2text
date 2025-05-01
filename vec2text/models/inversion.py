@@ -155,7 +155,7 @@ class DiffusionSampler(nn.Module):
         tok = self.embedder_tokenizer(
             texts, padding=True, return_tensors="pt", truncation=False
         ).to(self.device)
-        return self.inv.call_embedding_model(
+        return self._call_embed(
             input_ids=tok["input_ids"], attention_mask=tok["attention_mask"]
         )
 
@@ -199,6 +199,13 @@ class InversionModel(transformers.PreTrainedModel):
             nn.GELU(),
             nn.Linear(self.embedder_dim, h_dim * self.num_repeat_tokens),
         )
+
+        # learnable log-variances for uncertainty weighting
+        self.loss_logvars = nn.ParameterDict({
+            "emb" : nn.Parameter(torch.zeros(())),
+            "nce" : nn.Parameter(torch.zeros(())),
+            "margin" : nn.Parameter(torch.zeros(())),
+        })
 
         # we will lazily create the diffusion sampler so DDP stops complaining
         # about unused params
@@ -244,7 +251,7 @@ class InversionModel(transformers.PreTrainedModel):
         original autoregressive path is used.
         """
         generation_kwargs = copy.copy(generation_kwargs)
-        use_diffusion = generation_kwargs.pop("use_diffusion", False) and self.diffusion_enabled
+        use_diffusion = generation_kwargs.pop("use_diffusion", False) and self._diffusion_cfg["enabled"]
 
         # obtain target embedding
         if "frozen_embeddings" in inputs:
@@ -268,7 +275,7 @@ class InversionModel(transformers.PreTrainedModel):
                     p.requires_grad=False
             max_len = generation_kwargs.get("max_length", self.config.max_seq_length)
             num_cand = generation_kwargs.pop("num_candidates", None)
-            seq, _ = self.diffusion_sampler.sample(
+            seq, _ = self._diffusion_sampler.sample(
                 target_emb=frozen,
                 max_length=max_len,
                 num_candidates=num_cand,
@@ -296,9 +303,56 @@ class InversionModel(transformers.PreTrainedModel):
                 attention_mask=embedder_attention_mask,
             )
         embeds, attn = self._embed_and_project(frozen_embeddings=frozen_embeddings)
-        return self.encoder_decoder(
+        dec_out = self.encoder_decoder(
             inputs_embeds=embeds,
             attention_mask=attn,
             labels=labels,
             decoder_input_ids=decoder_input_ids,
         )
+
+        loss = dec_out.loss # cross-entropy
+
+        # ============ auxiliary losses (train mode only) =================
+        if self.training and labels is not None:
+            B, D = frozen_embeddings.size()
+            pad_id = self.tokenizer.pad_token_id
+
+            # sentence-level cosine loss
+            with torch.no_grad():
+                pred_ids = dec_out.logits.argmax(-1)
+                pred_emb = self.call_embedding_model(
+                    input_ids=pred_ids,
+                    attention_mask=(pred_ids != pad_id)
+                )
+            target_emb = frozen_embeddings # (B, D)
+            cos_sim    = torch.nn.functional.cosine_similarity(pred_emb, target_emb, dim=1)
+            l_emb      = (1.0 - cos_sim).mean()
+
+            # In-batch InfoNCE
+            tau   = self.config.nce_temperature
+            sim   = torch.nn.functional.cosine_similarity(
+                        pred_emb.unsqueeze(1), target_emb.unsqueeze(0), dim=-1)  # (B, B)
+            l_nce = (-torch.log_softmax(sim / tau, dim=1).diag()).mean()
+
+            # margin loss on bottleneck
+            h = self.embedding_transform[0](frozen_embeddings)
+            h = self.embedding_transform[1](h)             # GELU
+            neg = target_emb[torch.randperm(B, device=h.device)]
+            cos_pos = torch.nn.functional.cosine_similarity(h, target_emb, dim=1)
+            cos_neg = torch.nn.functional.cosine_similarity(h, neg,        dim=1)
+            m = self.config.margin_m
+            l_margin = torch.nn.functional.relu(m - cos_pos + cos_neg).mean()
+
+            # uncertainty-weighted sum
+            def uw(term, logvar):
+                return 0.5 * torch.exp(-logvar) * term + 0.5 * logvar
+            
+            loss = (
+                loss
+                + uw(l_emb,    self.loss_logvars["emb"])
+                + uw(l_nce,    self.loss_logvars["nce"])
+                + uw(l_margin, self.loss_logvars["margin"])
+            )
+            dec_out.loss = loss
+
+        return dec_out
