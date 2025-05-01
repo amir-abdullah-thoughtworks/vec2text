@@ -370,7 +370,7 @@ class InversionModel(transformers.PreTrainedModel):
                 "logvar_nce"   : self.loss_logvars["nce"].detach(),
                 "logvar_margin": self.loss_logvars["margin"].detach(),
             }
-        output = InvOutput(**dec_out.to_dict(), extra_losses=extra)
+        output = InvOutput(**dict(dec_out), extra_losses=extra)
         print(f"keys in output from forward(): {output.keys()}")
         print(f"accessing output.extra_losses in forward(): {output.extra_losses}")
         return output
