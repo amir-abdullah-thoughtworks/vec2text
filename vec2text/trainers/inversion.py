@@ -54,11 +54,9 @@ class InversionTrainer(BaseTrainer):
         # ---- call HF Trainer to run forward/backward ---------------
         loss = super().training_step(model, inputs)
 
-        # ---- only the main process & when control says so ----------
-        if self.control.should_log and self.is_world_process_zero():
-            # merge our extras with whatever Trainer already logged
-            prefixed = {f"train/{k}": v for k, v in self._last_extra_logs.items()}
-            self.log(prefixed)
+        # merge our extras with whatever Trainer already logged
+        prefixed = {f"train/{k}": v for k, v in self._last_extra_logs.items()}
+        self.log(prefixed)
 
         return loss
 
