@@ -194,18 +194,14 @@ class InversionModel(transformers.PreTrainedModel):
             nn.Linear(self.embedder_dim, h_dim * self.num_repeat_tokens),
         )
 
-        # ---------------- diffusion sampler ------------------------------
-        self.diffusion_enabled = getattr(config, "use_diffusion", False)
-        if self.diffusion_enabled:
-            self.diffusion_sampler = DiffusionSampler(
-                self,
-                num_steps=getattr(config, "diffusion_num_steps", 20),
-                guidance_scale=getattr(config, "diffusion_guidance_scale", 2.0),
-                num_candidates_default=getattr(config, "diffusion_num_candidates", 1),
-            )
-            # freeze sampler params so DDP doesn't expect gradients 
-            for p in self.diffusion_sampler.parameters():
-                p.requires_grad = False
+        # we will lazily create the diffusion sampler so DDP stops complaining
+        # about unused params
+        self._diffusion_cfg = {
+            "enabled": getattr(config, "use_diffusion", False),
+            "num_steps": getattr(config, "diffusion_num_steps", 20),
+            "guidance_scale": getattr(config, "diffusion_guidance_scale", 2.0),
+            "num_candidates": getattr(config, "diffusion_num_candidates", 1),
+        }
 
     # Core embedder routine
     def call_embedding_model(self, *, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:  # noqa: D401
@@ -254,6 +250,16 @@ class InversionModel(transformers.PreTrainedModel):
             )
 
         if use_diffusion:
+            # lazily create sampler to keep params out of DDP graph
+            if not hasattr(self, "_diffusion_sampler"):
+                self._diffusion_sampler = DiffusionSampler(
+                    self,
+                    num_steps=self._diffusion_cfg["num_steps"],
+                    guidance_scale=self._diffusion_cfg["guidance_scale"],
+                    num_candidates_default=self._diffusion_cfg["num_candidates"],
+                )
+                for p in self._diffusion_sampler.parameters():
+                    p.requires_grad=False
             max_len = generation_kwargs.get("max_length", self.config.max_seq_length)
             num_cand = generation_kwargs.pop("num_candidates", None)
             seq, _ = self.diffusion_sampler.sample(
