@@ -28,6 +28,7 @@ class InversionTrainer(BaseTrainer):
         outputs = model(**inputs)
         loss    = outputs.loss
 
+        print("checking if outputs has extra_losses")
         if hasattr(outputs, "extra_losses"):
             print("Has extra losses. Printing.")
             log_dict = {k: v.item() for k, v in outputs.extra_losses.items()}
