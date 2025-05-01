@@ -203,6 +203,9 @@ class InversionModel(transformers.PreTrainedModel):
                 guidance_scale=getattr(config, "diffusion_guidance_scale", 2.0),
                 num_candidates_default=getattr(config, "diffusion_num_candidates", 1),
             )
+            # freeze sampler params so DDP doesn't expect gradients 
+            for p in self.diffusion_sampler.parameters():
+                p.requires_grad = False
 
     # Core embedder routine
     def call_embedding_model(self, *, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:  # noqa: D401

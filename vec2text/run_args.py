@@ -187,6 +187,14 @@ class ModelArguments:
     diffusion_num_candidates: int = field(
         default=1,
         metadata={"help": "Number of candidates to be generated as part of the diffusion workflow."}
+    )
+    diffusion_guidance_scale: float = field(
+        default=2.0,
+        metadata={"help": "Intensity of embedding guidance in the diffusion process."}
+    ) 
+    diffusion_num_steps: int = field(
+        default=20,
+        metadata={"help": "Number of steps to take in diffusion process."}
     ) 
 
     def __post_init__(self):
