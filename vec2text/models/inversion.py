@@ -367,5 +367,4 @@ class InversionModel(transformers.PreTrainedModel):
                 "logvar_margin": self.loss_logvars["margin"].detach(),
             }
 
-        print(dec_out.extra_losses)
         return dec_out
