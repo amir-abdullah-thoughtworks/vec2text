@@ -315,8 +315,6 @@ class InversionModel(transformers.PreTrainedModel):
         dec_out.extra_losses = {}
 
         # ============ auxiliary losses (train mode only) =================
-        print(f"Training?: {self.training}")
-        print(f"Labels?: {labels}")
         if self.training and labels is not None:
             B, D = frozen_embeddings.size()
             pad_id = self.tokenizer.pad_token_id
@@ -368,5 +366,7 @@ class InversionModel(transformers.PreTrainedModel):
                 "logvar_nce"   : self.loss_logvars["nce"].detach(),
                 "logvar_margin": self.loss_logvars["margin"].detach(),
             }
+
+            print(dec_out.extra_losses)
 
         return dec_out
