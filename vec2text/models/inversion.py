@@ -368,4 +368,5 @@ class InversionModel(transformers.PreTrainedModel):
             }
 
         print(f"keys in dec_out from forward(): {dec_out.keys()}")
+        print(f"accessing dec_out.extra_losses in forward(): {dec_out.extra_losses}")
         return dec_out
