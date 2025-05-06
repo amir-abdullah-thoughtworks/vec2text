@@ -263,12 +263,7 @@ class InversionModel(transformers.PreTrainedModel):
             "l_diff" : nn.Parameter(torch.zeros(())),
         })
         
-        # -------- plug adapters in every decoder block -------------
-        if self.train_diffusion:
-            for blk in self.encoder_decoder.decoder.block:
-                blk.z_adapter = ZAdapter(self.embedder_dim,
-                                         self.encoder_decoder.config.hidden_size,
-                                         bottleneck = config.adapter_dim)
+        
         # ------------------------------------------------------------------
         # DIFFUSION
         # ------------------------------------------------------------------
@@ -279,8 +274,8 @@ class InversionModel(transformers.PreTrainedModel):
             "num_candidates": getattr(config, "diffusion_num_candidates", 1),
         }
 
-        self.train_diffusion = self._diffusion_cfg["enabled"]     # single boolean
-
+        self.train_diffusion = self._diffusion_cfg["enabled"]     # single boolean# -------- plug adapters in every decoder block -------------
+        
         # eagerly build sampler **only** when we train it, otherwise lazy-build
         if self.train_diffusion:
             self.diffusion_sampler = DiffusionSampler(
@@ -293,6 +288,11 @@ class InversionModel(transformers.PreTrainedModel):
             for p in self.diffusion_sampler.parameters():
                 p.requires_grad = True
             self._diffusion_sampler = self.diffusion_sampler
+            
+            for blk in self.encoder_decoder.decoder.block:
+                blk.z_adapter = ZAdapter(self.embedder_dim,
+                                         self.encoder_decoder.config.hidden_size,
+                                         bottleneck = config.adapter_dim)
         else:
             self.diffusion_sampler = None   # will be built lazily for inference
 
