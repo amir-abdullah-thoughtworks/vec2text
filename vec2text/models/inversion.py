@@ -264,7 +264,7 @@ class InversionModel(transformers.PreTrainedModel):
         })
         
         # -------- plug adapters in every decoder block -------------
-        if config.train_with_diffusion:
+        if self.train_diffusion:
             for blk in self.encoder_decoder.decoder.block:
                 blk.z_adapter = ZAdapter(self.embedder_dim,
                                          self.encoder_decoder.config.hidden_size,
@@ -328,7 +328,7 @@ class InversionModel(transformers.PreTrainedModel):
             guidance_scale    = self._diffusion_cfg["guidance_scale"],
             num_candidates_default = self._diffusion_cfg["num_candidates"],
         )
-        if not self.config.train_with_diffusion:
+        if not self.train_diffusion:
             for p in self._diffusion_sampler.parameters():
                 p.requires_grad_(False)
         return self._diffusion_sampler
@@ -411,7 +411,7 @@ class InversionModel(transformers.PreTrainedModel):
         # ============ auxiliary losses (train mode only) =================
         if self.training and labels is not None:
             # ---------- diffusion teacher forcing -------------------
-            if self.config.train_with_diffusion:
+            if self.train_diffusion:
                 l_tf = self._teacher_forcing_loss(frozen_embeddings, labels)
                 loss = loss + self.config.diffusion_teacher_weight * l_tf
                 extra_losses["tf_loss"] = l_tf.detach()
