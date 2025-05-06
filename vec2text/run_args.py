@@ -196,6 +196,16 @@ class ModelArguments:
         default=20,
         metadata={"help": "Number of steps to take in diffusion process."}
     )
+    train_with_diffusion: bool = field(
+        default=False, 
+        metadata={"help": "Enable joint training of denoiser & adapters"}
+    )
+    diffusion_teacher_weight: float = field(
+        default=1.0,  metadata={"help": "Weight of teacher-forcing loss"}
+    )
+    adapter_dim: int = field(
+        default=256,  metadata={"help": "Size of bottleneck adapter"}
+    )
     lambda_emb: float = field(
         default=1.0,
         metadata={"help": "Starting point for embedding loss coefficient. Scaling will be learned."}

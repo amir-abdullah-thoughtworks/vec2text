@@ -16,6 +16,18 @@ class InversionTrainer(BaseTrainer):
         self.embedder_tokenizer = self.model.embedder_tokenizer
         self.call_embedding_model = self.model.call_embedding_model
         self.embedder = self.model.embedder
+
+        if self.model.config.train_with_diffusion:
+            decay, no_decay = [], []
+            for n, p in self.model.named_parameters():
+                if not p.requires_grad:
+                    continue
+                (decay if p.ndim > 1 else no_decay).append(p)
+            self.optimizer = torch.optim.AdamW(
+                [{"params": decay,    "weight_decay": 0.01},
+                {"params": no_decay, "weight_decay": 0.00}],
+                lr = 5e-5,             # higher LR – very few params
+            )
     
     # ------------------------------------------------------------------
     # log per-component losses coming from InversionModel.forward

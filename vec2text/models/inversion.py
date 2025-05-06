@@ -161,6 +161,33 @@ class DiffusionSampler(nn.Module):
         best_seq = seqs[torch.arange(B, device=device), best_idx]
         best_cos = cosines.max(1).values
         return best_seq, best_cos
+    
+    def training_loss(
+        self,
+        seq_gt: torch.Tensor,          # (B, L) ground-truth tokens
+        tgt_emb: torch.Tensor,         # (B, D) frozen embeddings
+    ) -> torch.Tensor:
+        """
+        Implements the usual diffusion-LM objective:
+            sample timestep t  ~ U[1 .. T]
+            corrupt x₀ → x_t    with uniform masking
+            predict original tokens given (x_t, t, cond)
+        """
+        B, L = seq_gt.shape
+        device = seq_gt.device
+
+        t = torch.randint(0, self.num_steps, (B,), device=device)
+        # simple uniform-mask corruption
+        noise_mask = (torch.rand_like(seq_gt.float()) < (t[:, None] / self.num_steps))
+        x_t = torch.where(noise_mask, self.mask_id, seq_gt)
+
+        logits = self.denoiser(x_t, t, cond=tgt_emb)          # (B, L, V)
+        loss   = F.cross_entropy(
+            logits.view(-1, logits.size(-1)),                  # flatten
+            seq_gt.view(-1),
+            ignore_index=self.mask_id,
+        )
+        return loss
 
     # ------------------------- helpers -----------------------------------
 
@@ -172,6 +199,20 @@ class DiffusionSampler(nn.Module):
         return self._call_embed(
             input_ids=tok["input_ids"], attention_mask=tok["attention_mask"]
         )
+    
+class ZAdapter(nn.Module):
+    """Low-rank MLP (d_emb → d_model) added residually to decoder hidden state."""
+
+    def __init__(self, d_emb: int, d_model: int, bottleneck: int = 64):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(d_emb, bottleneck, bias=False),
+            nn.GELU(),
+            nn.Linear(bottleneck, d_model, bias=False),
+        )
+
+    def forward(self, z: torch.Tensor):
+        return self.mlp(z)  # (B,d_model)
 
 class InversionModel(transformers.PreTrainedModel):
     """Extends the original autoregressive inverter with optional discrete diffusion sampling."""
@@ -230,6 +271,13 @@ class InversionModel(transformers.PreTrainedModel):
             "num_candidates": getattr(config, "diffusion_num_candidates", 1),
         }
 
+        # -------- plug adapters in every decoder block -------------
+        if config.train_with_diffusion:
+            for blk in self.encoder_decoder.decoder.block:
+                blk.z_adapter = ZAdapter(self.embedder_dim,
+                                         self.encoder_decoder.config.hidden_size,
+                                         bottleneck = config.adapter_dim)
+
     # Core embedder routine
     def call_embedding_model(self, *, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:  # noqa: D401
         if self.embedder_model_api:
@@ -250,6 +298,27 @@ class InversionModel(transformers.PreTrainedModel):
         )
         attn = torch.ones(rep.shape[:2], device=rep.device)
         return rep, attn
+    
+    def _ensure_sampler(self):
+        if hasattr(self, "_diffusion_sampler"):
+            return
+        self._diffusion_sampler = DiffusionSampler(
+            self,
+            num_steps         = self._diffusion_cfg["num_steps"],
+            guidance_scale    = self._diffusion_cfg["guidance_scale"],
+            num_candidates_default = self._diffusion_cfg["num_candidates"],
+        )
+        if not self.config.train_with_diffusion:
+            for p in self._diffusion_sampler.parameters():
+                p.requires_grad_(False)
+
+    def _teacher_forcing_loss(self, tgt_emb, gold_ids):
+        """
+        DDIM-style objective (§3 in the paper):
+            sample t ~ U[1..T]; mask tokens; predict original.
+        """
+        self._ensure_sampler()
+        return self._diffusion_sampler.training_loss(gold_ids, tgt_emb)
 
     def generate_greedy(self, *, frozen_embeddings: torch.Tensor, **gen_kwargs) -> torch.Tensor:
         embeds, attn = self._embed_and_project(frozen_embeddings=frozen_embeddings)
@@ -278,15 +347,7 @@ class InversionModel(transformers.PreTrainedModel):
 
         if use_diffusion:
             # lazily create sampler to keep params out of DDP graph
-            if not hasattr(self, "_diffusion_sampler"):
-                self._diffusion_sampler = DiffusionSampler(
-                    self,
-                    num_steps=self._diffusion_cfg["num_steps"],
-                    guidance_scale=self._diffusion_cfg["guidance_scale"],
-                    num_candidates_default=self._diffusion_cfg["num_candidates"],
-                )
-                for p in self._diffusion_sampler.parameters():
-                    p.requires_grad=False
+            self._ensure_sampler()
             max_len = generation_kwargs.get("max_length", self.config.max_seq_length)
             num_cand = generation_kwargs.pop("num_candidates", None)
             seq, _ = self._diffusion_sampler.sample(
@@ -328,6 +389,12 @@ class InversionModel(transformers.PreTrainedModel):
         extra_losses = {}
         # ============ auxiliary losses (train mode only) =================
         if self.training and labels is not None:
+            # ---------- diffusion teacher forcing -------------------
+            if self.config.train_with_diffusion:
+                l_tf = self._teacher_forcing_loss(target_emb, labels)
+                loss = loss + self.config.diffusion_teacher_weight * l_tf
+                extra_losses["tf_loss"] = l_tf.detach()
+                
             B, D = frozen_embeddings.size()
             pad_id = self.tokenizer.pad_token_id
 
