@@ -176,6 +176,10 @@ class DiffusionSampler(nn.Module):
         B, L = seq_gt.shape
         device = seq_gt.device
 
+        pad_id = self.mask_id                    # tokenizer.pad_token_id
+        seq_gt = seq_gt.clone()
+        seq_gt[seq_gt == -100] = pad_id          # <-- make every −100 a real token
+
         t = torch.randint(0, self.num_steps, (B,), device=device)
         # simple uniform-mask corruption
         noise_mask = (torch.rand_like(seq_gt.float()) < (t[:, None] / self.num_steps))
@@ -185,7 +189,7 @@ class DiffusionSampler(nn.Module):
         loss   = F.cross_entropy(
             logits.view(-1, logits.size(-1)),                  # flatten
             seq_gt.view(-1),
-            ignore_index=self.mask_id,
+            ignore_index=pad_id,
         )
         return loss
 
