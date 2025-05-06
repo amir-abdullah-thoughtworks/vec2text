@@ -54,7 +54,7 @@ class SinusoidalTimeEmbedding(nn.Module):
 class TransformerDenoiser(nn.Module):
     """Small GPT‑style network predicting xₜ₋₁ from xₜ and the target embedding."""
 
-    def __init__(self, vocab_size: int, hidden_size: int = 768, n_layers: int = 6):
+    def __init__(self, vocab_size: int, hidden_size: int = 768, n_layers: int = 6, cond_dim: int = 1536):
         super().__init__()
         cfg = transformers.GPT2Config(
             vocab_size=vocab_size,
@@ -67,7 +67,7 @@ class TransformerDenoiser(nn.Module):
         )
         self.backbone = transformers.GPT2LMHeadModel(cfg)
         self.time_emb = SinusoidalTimeEmbedding(hidden_size)
-        self.cond_proj = nn.Linear(1536, hidden_size)
+        self.cond_proj = nn.Linear(cond_dim, hidden_size)
 
     def forward(
         self,
@@ -106,7 +106,12 @@ class DiffusionSampler(nn.Module):
         self.device = next(inv_model.parameters()).device
 
         # denoiser network
-        self.denoiser = TransformerDenoiser(self.tokenizer.vocab_size).to(self.device)
+        self.denoiser = TransformerDenoiser(
+            vocab_size   = self.tokenizer.vocab_size,
+            hidden_size  = 768,                     # keep model size
+            n_layers     = 6,
+            cond_dim     = inv_model.embedder_dim,  # <---- key line
+        ).to(self.device)
 
         # simple linear beta schedule  → deterministic DDIM
         self.register_buffer(
