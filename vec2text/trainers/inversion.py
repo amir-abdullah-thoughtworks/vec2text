@@ -4,9 +4,20 @@ from typing import Dict
 import torch
 import torch.nn as nn
 import transformers
+from transformers import TrainerCallback
 
 from vec2text.trainers.base import BaseTrainer
 
+class _UnfreezeDiffusionCallback(TrainerCallback):
+    def __init__(self, warmup_steps: int):
+        self.warmup_steps = warmup_steps
+    def on_step_begin(self, args, state, control, **kwargs):
+        model = kwargs["model"]
+        if getattr(model, "train_diffusion", False) and state.global_step == self.warmup_steps:
+            for p in model.diffusion_sampler.parameters():
+                p.requires_grad_(True)
+            if model.is_main_process:
+                print(f"[two-stage] diffusion unfrozen at step {state.global_step}")
 
 class InversionTrainer(BaseTrainer):
     def __init__(self, *args, **kwargs):
@@ -17,17 +28,9 @@ class InversionTrainer(BaseTrainer):
         self.call_embedding_model = self.model.call_embedding_model
         self.embedder = self.model.embedder
 
-        if self.model.config.train_with_diffusion:
-            decay, no_decay = [], []
-            for n, p in self.model.named_parameters():
-                if not p.requires_grad:
-                    continue
-                (decay if p.ndim > 1 else no_decay).append(p)
-            self.optimizer = torch.optim.AdamW(
-                [{"params": decay,    "weight_decay": 0.01},
-                {"params": no_decay, "weight_decay": 0.00}],
-                lr = 5e-5,             # higher LR – very few params
-            )
+        warmup = self.model.config.diffusion_warmup_steps
+        if self.model.train_diffusion:
+            self.add_callback(_UnfreezeDiffusionCallback(warmup))
     
     # ------------------------------------------------------------------
     # log per-component losses coming from InversionModel.forward

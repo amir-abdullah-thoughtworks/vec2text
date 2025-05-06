@@ -182,7 +182,11 @@ class ModelArguments:
     )
     use_diffusion: bool = field(
         default=False,
-        metadata={"help": "Whether to enable discrete diffusion in the InversionModel."},
+        metadata={"help": "If true we (i) decode with diffusion at eval / sampling time *and* (ii) optimise the diffusion loss after the warm-up stage (see --diffusion_warmup_steps)"},
+    )
+    diffusion_warmup_steps: int = field(
+        default=80_000,
+        metadata={"help": "How many optimiser steps to run with diffusion frozen before we start training it (stage-1 length)."},
     )
     diffusion_num_candidates: int = field(
         default=1,
@@ -195,10 +199,6 @@ class ModelArguments:
     diffusion_num_steps: int = field(
         default=20,
         metadata={"help": "Number of steps to take in diffusion process."}
-    )
-    train_with_diffusion: bool = field(
-        default=False, 
-        metadata={"help": "Enable joint training of denoiser & adapters"}
     )
     diffusion_teacher_weight: float = field(
         default=1.0,  metadata={"help": "Weight of teacher-forcing loss"}

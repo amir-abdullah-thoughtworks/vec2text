@@ -260,10 +260,18 @@ class InversionModel(transformers.PreTrainedModel):
             "emb" : nn.Parameter(torch.zeros(())),
             "nce" : nn.Parameter(torch.zeros(())),
             "margin" : nn.Parameter(torch.zeros(())),
+            "l_diff" : nn.Parameter(torch.zeros(())),
         })
-
-        # we will lazily create the diffusion sampler so DDP stops complaining
-        # about unused params
+        
+        # -------- plug adapters in every decoder block -------------
+        if config.train_with_diffusion:
+            for blk in self.encoder_decoder.decoder.block:
+                blk.z_adapter = ZAdapter(self.embedder_dim,
+                                         self.encoder_decoder.config.hidden_size,
+                                         bottleneck = config.adapter_dim)
+        # ------------------------------------------------------------------
+        # DIFFUSION
+        # ------------------------------------------------------------------
         self._diffusion_cfg = {
             "enabled": getattr(config, "use_diffusion", False),
             "num_steps": getattr(config, "diffusion_num_steps", 20),
@@ -271,12 +279,24 @@ class InversionModel(transformers.PreTrainedModel):
             "num_candidates": getattr(config, "diffusion_num_candidates", 1),
         }
 
-        # -------- plug adapters in every decoder block -------------
-        if config.train_with_diffusion:
-            for blk in self.encoder_decoder.decoder.block:
-                blk.z_adapter = ZAdapter(self.embedder_dim,
-                                         self.encoder_decoder.config.hidden_size,
-                                         bottleneck = config.adapter_dim)
+        self.train_diffusion = self._diffusion_cfg["enabled"]     # single boolean
+
+        # eagerly build sampler **only** when we train it, otherwise lazy-build
+        if self.train_diffusion:
+            self.diffusion_sampler = DiffusionSampler(
+                self,
+                num_steps         = self._diffusion_cfg["num_steps"],
+                guidance_scale    = self._diffusion_cfg["guidance_scale"],
+                num_candidates_default = self._diffusion_cfg["num_candidates"],
+            )
+            # make sure its params are optimised
+            for p in self.diffusion_sampler.parameters():
+                p.requires_grad = True
+            self._diffusion_sampler = self.diffusion_sampler
+        else:
+            self.diffusion_sampler = None   # will be built lazily for inference
+
+        
 
     # Core embedder routine
     def call_embedding_model(self, *, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:  # noqa: D401
@@ -301,7 +321,7 @@ class InversionModel(transformers.PreTrainedModel):
     
     def _ensure_sampler(self):
         if hasattr(self, "_diffusion_sampler"):
-            return
+            return self._diffusion_sampler
         self._diffusion_sampler = DiffusionSampler(
             self,
             num_steps         = self._diffusion_cfg["num_steps"],
@@ -311,6 +331,7 @@ class InversionModel(transformers.PreTrainedModel):
         if not self.config.train_with_diffusion:
             for p in self._diffusion_sampler.parameters():
                 p.requires_grad_(False)
+        return self._diffusion_sampler
 
     def _teacher_forcing_loss(self, tgt_emb, gold_ids):
         """
@@ -334,7 +355,7 @@ class InversionModel(transformers.PreTrainedModel):
         original autoregressive path is used.
         """
         generation_kwargs = copy.copy(generation_kwargs)
-        use_diffusion = generation_kwargs.pop("use_diffusion", False) and self._diffusion_cfg["enabled"]
+        use_diffusion = generation_kwargs.pop("use_diffusion", False) and self.train_diffusion
 
         # obtain target embedding
         if "frozen_embeddings" in inputs:
@@ -347,10 +368,10 @@ class InversionModel(transformers.PreTrainedModel):
 
         if use_diffusion:
             # lazily create sampler to keep params out of DDP graph
-            self._ensure_sampler()
+            sampler = self._ensure_sampler()
             max_len = generation_kwargs.get("max_length", self.config.max_seq_length)
             num_cand = generation_kwargs.pop("num_candidates", None)
-            seq, _ = self._diffusion_sampler.sample(
+            seq, _ = sampler.sample(
                 target_emb=frozen,
                 max_length=max_len,
                 num_candidates=num_cand,
@@ -391,10 +412,10 @@ class InversionModel(transformers.PreTrainedModel):
         if self.training and labels is not None:
             # ---------- diffusion teacher forcing -------------------
             if self.config.train_with_diffusion:
-                l_tf = self._teacher_forcing_loss(target_emb, labels)
+                l_tf = self._teacher_forcing_loss(frozen_embeddings, labels)
                 loss = loss + self.config.diffusion_teacher_weight * l_tf
                 extra_losses["tf_loss"] = l_tf.detach()
-                
+
             B, D = frozen_embeddings.size()
             pad_id = self.tokenizer.pad_token_id
 
@@ -424,6 +445,15 @@ class InversionModel(transformers.PreTrainedModel):
             m = self.config.margin_m
             l_margin = torch.nn.functional.relu(m - cos_pos + cos_neg).mean()
 
+            # ---------- diffusion LM loss  (only when we train diffusion) -----
+            if self.train_diffusion and (self.diffusion_sampler is not None):
+                l_diff = self.diffusion_sampler.training_loss(
+                    seq_gt  = labels,
+                    tgt_emb = frozen_embeddings,
+                )
+            else:
+                l_diff = torch.zeros((), device=loss.device)
+
             # uncertainty-weighted sum
             def uw(term, logvar):
                 return 0.5 * torch.exp(-logvar) * term + 0.5 * logvar
@@ -433,17 +463,21 @@ class InversionModel(transformers.PreTrainedModel):
                 + uw(l_emb,    self.loss_logvars["emb"])
                 + uw(l_nce,    self.loss_logvars["nce"])
                 + uw(l_margin, self.loss_logvars["margin"])
+                + uw(l_diff, self.loss_logvars["l_diff"])
             )
             dec_out.loss = loss
 
             extra_losses = {
-                "ce_loss"      : dec_out.loss.detach(),
+                "total_loss"   : dec_out.loss.detach(),
+                "ce_loss"      : loss.detach(),
                 "emb_loss"     : l_emb.detach(),
                 "nce_loss"     : l_nce.detach(),
                 "margin_loss"  : l_margin.detach(),
+                "diffusion_loss": l_diff.detach(),
                 "logvar_emb"   : self.loss_logvars["emb"].detach(),
                 "logvar_nce"   : self.loss_logvars["nce"].detach(),
                 "logvar_margin": self.loss_logvars["margin"].detach(),
+                "logvar_l_diff": self.loss_logvars["l_diff"].detach(),
             }
         output = InvOutput(**dict(dec_out), extra_losses=extra_losses)
         return output
