@@ -7,6 +7,7 @@ from typing import Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F 
 import transformers
 from transformers.modeling_outputs import Seq2SeqLMOutput
 from dataclasses import dataclass
@@ -151,7 +152,9 @@ class DiffusionSampler(nn.Module):
         for _ in range(num_candidates):
             seq = run_chain()
             seqs.append(seq)
-            cosines.append(self._embed(seq).cosine_similarity(target_emb).to(device))
+            pred_emb = self._embed(seq)                       # (B, D)
+            sim = F.cosine_similarity(pred_emb, target_emb, dim=1)
+            cosines.append(sim.to(device))
         seqs = torch.stack(seqs, dim=1)   # (B,N,L)
         cosines = torch.stack(cosines, 1) # (B,N)
         best_idx = cosines.argmax(1)
