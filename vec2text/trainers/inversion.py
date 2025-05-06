@@ -14,8 +14,11 @@ class _UnfreezeDiffusionCallback(TrainerCallback):
     def on_step_begin(self, args, state, control, **kwargs):
         model = kwargs["model"]
         if getattr(model, "train_diffusion", False) and state.global_step == self.warmup_steps:
+            # 1) un-freeze sampler
             for p in model.diffusion_sampler.parameters():
                 p.requires_grad_(True)
+            # 2) un-freeze & wire-in adapters
+            model._enable_adapters()
             if model.is_main_process:
                 print(f"[two-stage] diffusion unfrozen at step {state.global_step}")
 

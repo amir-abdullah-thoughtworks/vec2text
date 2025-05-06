@@ -274,7 +274,8 @@ class InversionModel(transformers.PreTrainedModel):
             "num_candidates": getattr(config, "diffusion_num_candidates", 1),
         }
 
-        self.train_diffusion = self._diffusion_cfg["enabled"]     # single boolean# -------- plug adapters in every decoder block -------------
+        self.train_diffusion = self._diffusion_cfg["enabled"]     # single boolean
+
         
         # eagerly build sampler **only** when we train it, otherwise lazy-build
         if self.train_diffusion:
@@ -288,15 +289,41 @@ class InversionModel(transformers.PreTrainedModel):
             for p in self.diffusion_sampler.parameters():
                 p.requires_grad = True
             self._diffusion_sampler = self.diffusion_sampler
-            
-            for blk in self.encoder_decoder.decoder.block:
-                blk.z_adapter = ZAdapter(self.embedder_dim,
-                                         self.encoder_decoder.config.hidden_size,
-                                         bottleneck = config.adapter_dim)
         else:
             self.diffusion_sampler = None   # will be built lazily for inference
-
         
+        # ------------------------------------------------------------------
+        # Decoder Z-Adapters (one per block, initially **frozen**)
+        # ------------------------------------------------------------------
+        self._adapters_enabled = False          # toggled at warm-up
+        for blk in self.encoder_decoder.decoder.block:
+            blk.z_adapter = ZAdapter(
+                self.embedder_dim,
+                self.encoder_decoder.config.hidden_size,
+                bottleneck=config.adapter_dim,
+            )
+            blk.z_adapter.requires_grad_(False)   # <- ignore in stage-1
+
+    # ---------- adapter control -----------------------------------------
+    def _enable_adapters(self):
+        "Activate adapters once and wire them into every decoder block."
+        if self._adapters_enabled:
+            return
+        self._adapters_enabled = True
+        for blk in self.encoder_decoder.decoder.block:
+            blk.z_adapter.requires_grad_(True)
+
+            # inject z-vector after the block’s FFN
+            def _hook(module, _inp, out, blk=blk):
+                # out: Tensor (B, L, H)
+                z = blk.z_adapter(self._current_z)  # (B, H)
+                return out + z[:, None, :]
+
+            blk._z_handle = blk.register_forward_hook(_hook)
+
+    def _cache_z(self, frozen_embeddings: torch.Tensor):
+        "Store z so that the hook can access it."
+        self._current_z = frozen_embeddings.detach()
 
     # Core embedder routine
     def call_embedding_model(self, *, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:  # noqa: D401
@@ -398,6 +425,8 @@ class InversionModel(transformers.PreTrainedModel):
                 input_ids=embedder_input_ids,
                 attention_mask=embedder_attention_mask,
             )
+        # cache z so every decoder block can see it
+        self._cache_z(frozen_embeddings)
         embeds, attn = self._embed_and_project(frozen_embeddings=frozen_embeddings)
         dec_out = self.encoder_decoder(
             inputs_embeds=embeds,
