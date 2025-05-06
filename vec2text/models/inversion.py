@@ -279,22 +279,9 @@ class InversionModel(transformers.PreTrainedModel):
         }
 
         self.train_diffusion = self._diffusion_cfg["enabled"]     # single boolean
-
         
-        # eagerly build sampler **only** when we train it, otherwise lazy-build
-        if self.train_diffusion:
-            self.diffusion_sampler = DiffusionSampler(
-                self,
-                num_steps         = self._diffusion_cfg["num_steps"],
-                guidance_scale    = self._diffusion_cfg["guidance_scale"],
-                num_candidates_default = self._diffusion_cfg["num_candidates"],
-            )
-            # make sure its params are optimised
-            for p in self.diffusion_sampler.parameters():
-                p.requires_grad = True
-            self._diffusion_sampler = self.diffusion_sampler
-        else:
-            self.diffusion_sampler = None   # will be built lazily for inference
+        # a single handle – will be (lazily) instantiated by _ensure_sampler()
+        self.diffusion_sampler: Optional[DiffusionSampler] = None
         
         # ------------------------------------------------------------------
         # Decoder Z-Adapters (one per block, initially **frozen**)
@@ -351,18 +338,20 @@ class InversionModel(transformers.PreTrainedModel):
         return rep, attn
     
     def _ensure_sampler(self):
-        if hasattr(self, "_diffusion_sampler"):
-            return self._diffusion_sampler
-        self._diffusion_sampler = DiffusionSampler(
+        if self.diffusion_sampler is not None:
+            return self.diffusion_sampler
+        self.diffusion_sampler = DiffusionSampler(
             self,
             num_steps         = self._diffusion_cfg["num_steps"],
             guidance_scale    = self._diffusion_cfg["guidance_scale"],
             num_candidates_default = self._diffusion_cfg["num_candidates"],
         )
+        
+        # freeze unless we really train it
         if not self.train_diffusion:
-            for p in self._diffusion_sampler.parameters():
-                p.requires_grad_(False)
-        return self._diffusion_sampler
+            for p in self.diffusion_sampler.parameters():
+                 p.requires_grad_(False)
+        return self.diffusion_sampler
 
     def _teacher_forcing_loss(self, tgt_emb, gold_ids):
         """
@@ -370,7 +359,7 @@ class InversionModel(transformers.PreTrainedModel):
             sample t ~ U[1..T]; mask tokens; predict original.
         """
         self._ensure_sampler()
-        return self._diffusion_sampler.training_loss(gold_ids, tgt_emb)
+        return self.diffusion_sampler.training_loss(gold_ids, tgt_emb)
 
     def generate_greedy(self, *, frozen_embeddings: torch.Tensor, **gen_kwargs) -> torch.Tensor:
         embeds, attn = self._embed_and_project(frozen_embeddings=frozen_embeddings)
