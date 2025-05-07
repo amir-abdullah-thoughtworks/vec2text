@@ -7,9 +7,13 @@ from typing import Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F 
+import torch.nn.functional as F
 import transformers
-from transformers.modeling_outputs import Seq2SeqLMOutput
+from transformers.modeling_outputs import (
+    Seq2SeqLMOutput,
+    BaseModelOutput,
+    BaseModelOutputWithPastAndCrossAttentions,
+)
 from dataclasses import dataclass
 from sentence_transformers import SentenceTransformer
 
@@ -27,13 +31,16 @@ from vec2text.utils import embed_api
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class InvOutput(Seq2SeqLMOutput):
     extra_losses: Dict[str, torch.Tensor] = None
 
+
 # ===========================================================================
 # Diffusion utilities -------------------------------------------------------
 # ===========================================================================
+
 
 class SinusoidalTimeEmbedding(nn.Module):
     """Classic 1‑D sinusoidal embedding used in diffusion works."""
@@ -55,7 +62,13 @@ class SinusoidalTimeEmbedding(nn.Module):
 class TransformerDenoiser(nn.Module):
     """Small GPT‑style network predicting xₜ₋₁ from xₜ and the target embedding."""
 
-    def __init__(self, vocab_size: int, hidden_size: int = 768, n_layers: int = 6, cond_dim: int = 1536):
+    def __init__(
+        self,
+        vocab_size: int,
+        hidden_size: int = 768,
+        n_layers: int = 6,
+        cond_dim: int = 1536,
+    ):
         super().__init__()
         cfg = transformers.GPT2Config(
             vocab_size=vocab_size,
@@ -72,12 +85,14 @@ class TransformerDenoiser(nn.Module):
 
     def forward(
         self,
-        x_t: torch.Tensor,               # (B, L)
-        t: torch.Tensor,                 # (B,)
-        cond: Optional[torch.Tensor],    # (B, 1536) or None
-    ) -> torch.Tensor:                   # logits (B, L, V)
+        x_t: torch.Tensor,  # (B, L)
+        t: torch.Tensor,  # (B,)
+        cond: Optional[torch.Tensor],  # (B, 1536) or None
+    ) -> torch.Tensor:  # logits (B, L, V)
         tok_emb = self.backbone.transformer.wte(x_t)
-        pos_emb = self.backbone.transformer.wpe(torch.arange(x_t.size(1), device=x_t.device)[None])
+        pos_emb = self.backbone.transformer.wpe(
+            torch.arange(x_t.size(1), device=x_t.device)[None]
+        )
         h = tok_emb + pos_emb + self.time_emb(t)[:, None, :]
         if cond is not None:
             h = h + self.cond_proj(cond)[:, None, :]
@@ -97,7 +112,7 @@ class DiffusionSampler(nn.Module):
         super().__init__()
 
         self._call_embed = inv_model.call_embedding_model  # function handle
-        self.tokenizer = inv_model.tokenizer               # not an nn.Module
+        self.tokenizer = inv_model.tokenizer  # not an nn.Module
         self.embedder_tokenizer = inv_model.embedder_tokenizer
 
         # hyper‑params
@@ -108,10 +123,10 @@ class DiffusionSampler(nn.Module):
 
         # denoiser network
         self.denoiser = TransformerDenoiser(
-            vocab_size   = self.tokenizer.vocab_size,
-            hidden_size  = 768,                     # keep model size
-            n_layers     = 6,
-            cond_dim     = inv_model.embedder_dim,  # <---- key line
+            vocab_size=self.tokenizer.vocab_size,
+            hidden_size=768,  # keep model size
+            n_layers=6,
+            cond_dim=inv_model.embedder_dim,  # <---- key line
         ).to(self.device)
 
         # simple linear beta schedule  → deterministic DDIM
@@ -125,7 +140,7 @@ class DiffusionSampler(nn.Module):
     @torch.no_grad()
     def sample(
         self,
-        target_emb: torch.Tensor,            # (B, 1536)
+        target_emb: torch.Tensor,  # (B, 1536)
         *,
         max_length: int,
         num_candidates: int | None = None,
@@ -152,20 +167,20 @@ class DiffusionSampler(nn.Module):
         for _ in range(num_candidates):
             seq = run_chain()
             seqs.append(seq)
-            pred_emb = self._embed(seq)                       # (B, D)
+            pred_emb = self._embed(seq)  # (B, D)
             sim = F.cosine_similarity(pred_emb, target_emb, dim=1)
             cosines.append(sim.to(device))
-        seqs = torch.stack(seqs, dim=1)   # (B,N,L)
-        cosines = torch.stack(cosines, 1) # (B,N)
+        seqs = torch.stack(seqs, dim=1)  # (B,N,L)
+        cosines = torch.stack(cosines, 1)  # (B,N)
         best_idx = cosines.argmax(1)
         best_seq = seqs[torch.arange(B, device=device), best_idx]
         best_cos = cosines.max(1).values
         return best_seq, best_cos
-    
+
     def training_loss(
         self,
-        seq_gt: torch.Tensor,          # (B, L) ground-truth tokens
-        tgt_emb: torch.Tensor,         # (B, D) frozen embeddings
+        seq_gt: torch.Tensor,  # (B, L) ground-truth tokens
+        tgt_emb: torch.Tensor,  # (B, D) frozen embeddings
     ) -> torch.Tensor:
         """
         Implements the usual diffusion-LM objective:
@@ -176,18 +191,18 @@ class DiffusionSampler(nn.Module):
         B, L = seq_gt.shape
         device = seq_gt.device
 
-        pad_id = self.mask_id                    # tokenizer.pad_token_id
+        pad_id = self.mask_id  # tokenizer.pad_token_id
         seq_gt = seq_gt.clone()
-        seq_gt[seq_gt == -100] = pad_id          # <-- make every −100 a real token
+        seq_gt[seq_gt == -100] = pad_id  # <-- make every −100 a real token
 
         t = torch.randint(0, self.num_steps, (B,), device=device)
         # simple uniform-mask corruption
-        noise_mask = (torch.rand_like(seq_gt.float()) < (t[:, None] / self.num_steps))
+        noise_mask = torch.rand_like(seq_gt.float()) < (t[:, None] / self.num_steps)
         x_t = torch.where(noise_mask, self.mask_id, seq_gt)
 
-        logits = self.denoiser(x_t, t, cond=tgt_emb)          # (B, L, V)
-        loss   = F.cross_entropy(
-            logits.view(-1, logits.size(-1)),                  # flatten
+        logits = self.denoiser(x_t, t, cond=tgt_emb)  # (B, L, V)
+        loss = F.cross_entropy(
+            logits.view(-1, logits.size(-1)),  # flatten
             seq_gt.view(-1),
             ignore_index=pad_id,
         )
@@ -203,7 +218,8 @@ class DiffusionSampler(nn.Module):
         return self._call_embed(
             input_ids=tok["input_ids"], attention_mask=tok["attention_mask"]
         )
-    
+
+
 class ZAdapter(nn.Module):
     """Low-rank MLP (d_emb → d_model) added residually to decoder hidden state."""
 
@@ -218,6 +234,7 @@ class ZAdapter(nn.Module):
     def forward(self, z: torch.Tensor):
         return self.mlp(z)  # (B,d_model)
 
+
 class InversionModel(transformers.PreTrainedModel):
     """Extends the original autoregressive inverter with optional discrete diffusion sampling."""
 
@@ -227,11 +244,15 @@ class InversionModel(transformers.PreTrainedModel):
 
     def __init__(self, config: InversionConfig):
         super().__init__(config=config)
-        encoder_decoder = load_encoder_decoder(config.model_name_or_path, lora=config.use_lora)
+        encoder_decoder = load_encoder_decoder(
+            config.model_name_or_path, lora=config.use_lora
+        )
         embedder, embedder_tok = load_embedder_and_tokenizer(
             name=config.embedder_model_name, torch_dtype=config.embedder_torch_dtype
         )
-        tokenizer = load_tokenizer(config.model_name_or_path, max_length=config.max_seq_length)
+        tokenizer = load_tokenizer(
+            config.model_name_or_path, max_length=config.max_seq_length
+        )
 
         self.encoder_decoder = encoder_decoder
         self.tokenizer = tokenizer
@@ -244,10 +265,14 @@ class InversionModel(transformers.PreTrainedModel):
                 p.requires_grad = False
             self.embedder.eval()
         self.embedder_model_api = config.embedder_model_api
-        self.embedder_dim = 1536 if self.embedder_model_api else (
-            embedder.get_sentence_embedding_dimension()
-            if isinstance(embedder, SentenceTransformer)
-            else embedder.config.hidden_size
+        self.embedder_dim = (
+            1536
+            if self.embedder_model_api
+            else (
+                embedder.get_sentence_embedding_dimension()
+                if isinstance(embedder, SentenceTransformer)
+                else embedder.config.hidden_size
+            )
         )
         self.num_repeat_tokens = config.num_repeat_tokens
         self.noise_level = vars(config).get("embedder_gaussian_noise_level", 0.0)
@@ -260,14 +285,15 @@ class InversionModel(transformers.PreTrainedModel):
         )
 
         # learnable log-variances for uncertainty weighting
-        self.loss_logvars = nn.ParameterDict({
-            "emb" : nn.Parameter(torch.zeros(())),
-            "nce" : nn.Parameter(torch.zeros(())),
-            "margin" : nn.Parameter(torch.zeros(())),
-            "l_diff" : nn.Parameter(torch.zeros(())),
-        })
-        
-        
+        self.loss_logvars = nn.ParameterDict(
+            {
+                "emb": nn.Parameter(torch.zeros(())),
+                "nce": nn.Parameter(torch.zeros(())),
+                "margin": nn.Parameter(torch.zeros(())),
+                "l_diff": nn.Parameter(torch.zeros(())),
+            }
+        )
+
         # ------------------------------------------------------------------
         # DIFFUSION
         # ------------------------------------------------------------------
@@ -278,22 +304,22 @@ class InversionModel(transformers.PreTrainedModel):
             "num_candidates": getattr(config, "diffusion_num_candidates", 1),
         }
 
-        self.train_diffusion = self._diffusion_cfg["enabled"]     # single boolean
-        
+        self.train_diffusion = self._diffusion_cfg["enabled"]  # single boolean
+
         # a single handle – will be (lazily) instantiated by _ensure_sampler()
         self.diffusion_sampler: Optional[DiffusionSampler] = None
-        
+
         # ------------------------------------------------------------------
         # Decoder Z-Adapters (one per block, initially **frozen**)
         # ------------------------------------------------------------------
-        self._adapters_enabled = False          # toggled at warm-up
+        self._adapters_enabled = False  # toggled at warm-up
         for blk in self.encoder_decoder.decoder.block:
             blk.z_adapter = ZAdapter(
                 self.embedder_dim,
                 self.encoder_decoder.config.hidden_size,
                 bottleneck=config.adapter_dim,
             )
-            blk.z_adapter.requires_grad_(False)   # <- ignore in stage-1
+            blk.z_adapter.requires_grad_(False)  # <- ignore in stage-1
 
     # ---------- adapter control -----------------------------------------
     def _enable_adapters(self):
@@ -308,6 +334,27 @@ class InversionModel(transformers.PreTrainedModel):
             def _hook(module, _inp, out, blk=blk):
                 # out: Tensor (B, L, H)
                 z = blk.z_adapter(self._current_z)  # (B, H)
+                # 1. Newer HF versions – out is a (frozen) dataclass / tuple-like
+                if isinstance(
+                    out, (BaseModelOutput, BaseModelOutputWithPastAndCrossAttentions)
+                ):
+                    hidden = out.last_hidden_state + z[:, None, :]
+                    # Re-create the same dataclass with the modified hidden state.
+                    return out.__class__(
+                        last_hidden_state=hidden,
+                        **{
+                            k: getattr(out, k)
+                            for k in out.__dataclass_fields__.keys()
+                            if k != "last_hidden_state"
+                        },
+                    )
+
+                # 2. Generic tuple (covers other future variants)
+                if isinstance(out, tuple):
+                    hidden = out[0] + z[:, None, :]
+                    return (hidden, *out[1:])
+
+                # 3. Older HF versions – out is a plain Tensor
                 return out + z[:, None, :]
 
             blk._z_handle = blk.register_forward_hook(_hook)
@@ -317,11 +364,19 @@ class InversionModel(transformers.PreTrainedModel):
         self._current_z = frozen_embeddings.detach()
 
     # Core embedder routine
-    def call_embedding_model(self, *, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:  # noqa: D401
+    def call_embedding_model(
+        self, *, input_ids: torch.Tensor, attention_mask: torch.Tensor
+    ) -> torch.Tensor:  # noqa: D401
         if self.embedder_model_api:
-            return embed_api(input_ids=input_ids, embedder_tokenizer=self.embedder_tokenizer, api_name=self.embedder_model_api)
+            return embed_api(
+                input_ids=input_ids,
+                embedder_tokenizer=self.embedder_tokenizer,
+                api_name=self.embedder_model_api,
+            )
         elif isinstance(self.embedder, SentenceTransformer):
-            out = self.embedder({"input_ids": input_ids, "attention_mask": attention_mask})
+            out = self.embedder(
+                {"input_ids": input_ids, "attention_mask": attention_mask}
+            )
             emb = out["sentence_embedding"]
         else:
             out = self.embedder(input_ids=input_ids, attention_mask=attention_mask)
@@ -330,27 +385,29 @@ class InversionModel(transformers.PreTrainedModel):
             emb = emb + self.noise_level * torch.randn_like(emb)
         return emb
 
-    def _embed_and_project(self, *, frozen_embeddings: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _embed_and_project(
+        self, *, frozen_embeddings: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         rep = self.embedding_transform(frozen_embeddings).view(
             frozen_embeddings.size(0), self.num_repeat_tokens, -1
         )
         attn = torch.ones(rep.shape[:2], device=rep.device)
         return rep, attn
-    
+
     def _ensure_sampler(self):
         if self.diffusion_sampler is not None:
             return self.diffusion_sampler
         self.diffusion_sampler = DiffusionSampler(
             self,
-            num_steps         = self._diffusion_cfg["num_steps"],
-            guidance_scale    = self._diffusion_cfg["guidance_scale"],
-            num_candidates_default = self._diffusion_cfg["num_candidates"],
+            num_steps=self._diffusion_cfg["num_steps"],
+            guidance_scale=self._diffusion_cfg["guidance_scale"],
+            num_candidates_default=self._diffusion_cfg["num_candidates"],
         )
-        
+
         # freeze unless we really train it
         if not self.train_diffusion:
             for p in self.diffusion_sampler.parameters():
-                 p.requires_grad_(False)
+                p.requires_grad_(False)
         return self.diffusion_sampler
 
     def _teacher_forcing_loss(self, tgt_emb, gold_ids):
@@ -361,21 +418,31 @@ class InversionModel(transformers.PreTrainedModel):
         self._ensure_sampler()
         return self.diffusion_sampler.training_loss(gold_ids, tgt_emb)
 
-    def generate_greedy(self, *, frozen_embeddings: torch.Tensor, **gen_kwargs) -> torch.Tensor:
+    def generate_greedy(
+        self, *, frozen_embeddings: torch.Tensor, **gen_kwargs
+    ) -> torch.Tensor:
         embeds, attn = self._embed_and_project(frozen_embeddings=frozen_embeddings)
-        return self.encoder_decoder.generate(inputs_embeds=embeds, attention_mask=attn, **gen_kwargs)
+        return self.encoder_decoder.generate(
+            inputs_embeds=embeds, attention_mask=attn, **gen_kwargs
+        )
 
     # ------------------------------------------------------------------
     # PUBLIC GENERATE ---------------------------------------------------
     # ------------------------------------------------------------------
 
-    def generate(self, inputs: Dict[str, torch.Tensor], generation_kwargs: Dict[str, torch.Tensor]) -> torch.Tensor:  # noqa: D401
+    def generate(
+        self,
+        inputs: Dict[str, torch.Tensor],
+        generation_kwargs: Dict[str, torch.Tensor],
+    ) -> torch.Tensor:  # noqa: D401
         """Unified entry‑point.  Pass ``use_diffusion=True`` in
         ``generation_kwargs`` to switch to the diffusion sampler; otherwise the
         original autoregressive path is used.
         """
         generation_kwargs = copy.copy(generation_kwargs)
-        use_diffusion = generation_kwargs.pop("use_diffusion", False) and self.train_diffusion
+        use_diffusion = (
+            generation_kwargs.pop("use_diffusion", False) and self.train_diffusion
+        )
 
         # obtain target embedding
         if "frozen_embeddings" in inputs:
@@ -399,7 +466,7 @@ class InversionModel(transformers.PreTrainedModel):
             return seq
         else:
             return self.generate_greedy(frozen_embeddings=frozen, **generation_kwargs)
-    
+
     def forward(
         self,
         *,
@@ -413,7 +480,9 @@ class InversionModel(transformers.PreTrainedModel):
         """Default training-forward path (always autoregressive)."""
         # Unused: input_ids, attention_mask
         if frozen_embeddings is None:
-            assert embedder_input_ids is not None, "Need embedder_input_ids when frozen_embeddings absent"
+            assert (
+                embedder_input_ids is not None
+            ), "Need embedder_input_ids when frozen_embeddings absent"
             frozen_embeddings = self.call_embedding_model(
                 input_ids=embedder_input_ids,
                 attention_mask=embedder_attention_mask,
@@ -428,7 +497,7 @@ class InversionModel(transformers.PreTrainedModel):
             decoder_input_ids=decoder_input_ids,
         )
 
-        loss = dec_out.loss # cross-entropy
+        loss = dec_out.loss  # cross-entropy
         extra_losses = {}
         # ============ auxiliary losses (train mode only) =================
         if self.training and labels is not None:
@@ -445,33 +514,33 @@ class InversionModel(transformers.PreTrainedModel):
             with torch.no_grad():
                 pred_ids = dec_out.logits.argmax(-1)
                 pred_emb = self.call_embedding_model(
-                    input_ids=pred_ids,
-                    attention_mask=(pred_ids != pad_id)
+                    input_ids=pred_ids, attention_mask=(pred_ids != pad_id)
                 )
-            target_emb = frozen_embeddings # (B, D)
-            cos_sim    = torch.nn.functional.cosine_similarity(pred_emb, target_emb, dim=1)
-            l_emb      = (1.0 - cos_sim).mean()
+            target_emb = frozen_embeddings  # (B, D)
+            cos_sim = torch.nn.functional.cosine_similarity(pred_emb, target_emb, dim=1)
+            l_emb = (1.0 - cos_sim).mean()
 
             # In-batch InfoNCE
-            tau   = self.config.nce_temperature
-            sim   = torch.nn.functional.cosine_similarity(
-                        pred_emb.unsqueeze(1), target_emb.unsqueeze(0), dim=-1)  # (B, B)
+            tau = self.config.nce_temperature
+            sim = torch.nn.functional.cosine_similarity(
+                pred_emb.unsqueeze(1), target_emb.unsqueeze(0), dim=-1
+            )  # (B, B)
             l_nce = (-torch.log_softmax(sim / tau, dim=1).diag()).mean()
 
             # margin loss on bottleneck
             h = self.embedding_transform[0](frozen_embeddings)
-            h = self.embedding_transform[1](h)             # GELU
+            h = self.embedding_transform[1](h)  # GELU
             neg = target_emb[torch.randperm(B, device=h.device)]
             cos_pos = torch.nn.functional.cosine_similarity(h, target_emb, dim=1)
-            cos_neg = torch.nn.functional.cosine_similarity(h, neg,        dim=1)
+            cos_neg = torch.nn.functional.cosine_similarity(h, neg, dim=1)
             m = self.config.margin_m
             l_margin = torch.nn.functional.relu(m - cos_pos + cos_neg).mean()
 
             # ---------- diffusion LM loss  (only when we train diffusion) -----
             if self.train_diffusion and (self.diffusion_sampler is not None):
                 l_diff = self.diffusion_sampler.training_loss(
-                    seq_gt  = labels,
-                    tgt_emb = frozen_embeddings,
+                    seq_gt=labels,
+                    tgt_emb=frozen_embeddings,
                 )
             else:
                 l_diff = torch.zeros((), device=loss.device)
@@ -479,25 +548,25 @@ class InversionModel(transformers.PreTrainedModel):
             # uncertainty-weighted sum
             def uw(term, logvar):
                 return 0.5 * torch.exp(-logvar) * term + 0.5 * logvar
-            
+
             loss = (
                 loss
-                + uw(l_emb,    self.loss_logvars["emb"])
-                + uw(l_nce,    self.loss_logvars["nce"])
+                + uw(l_emb, self.loss_logvars["emb"])
+                + uw(l_nce, self.loss_logvars["nce"])
                 + uw(l_margin, self.loss_logvars["margin"])
                 + uw(l_diff, self.loss_logvars["l_diff"])
             )
             dec_out.loss = loss
 
             extra_losses = {
-                "total_loss"   : dec_out.loss.detach(),
-                "ce_loss"      : loss.detach(),
-                "emb_loss"     : l_emb.detach(),
-                "nce_loss"     : l_nce.detach(),
-                "margin_loss"  : l_margin.detach(),
+                "total_loss": dec_out.loss.detach(),
+                "ce_loss": loss.detach(),
+                "emb_loss": l_emb.detach(),
+                "nce_loss": l_nce.detach(),
+                "margin_loss": l_margin.detach(),
                 "diffusion_loss": l_diff.detach(),
-                "logvar_emb"   : self.loss_logvars["emb"].detach(),
-                "logvar_nce"   : self.loss_logvars["nce"].detach(),
+                "logvar_emb": self.loss_logvars["emb"].detach(),
+                "logvar_nce": self.loss_logvars["nce"].detach(),
                 "logvar_margin": self.loss_logvars["margin"].detach(),
                 "logvar_l_diff": self.loss_logvars["l_diff"].detach(),
             }
