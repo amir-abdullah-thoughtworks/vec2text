@@ -19,7 +19,7 @@ class _UnfreezeDiffusionCallback(TrainerCallback):
                 p.requires_grad_(True)
             # 2) un-freeze & wire-in adapters
             model._enable_adapters()
-            if model.is_main_process:
+            if state.is_world_process_zero:
                 print(f"[two-stage] diffusion unfrozen at step {state.global_step}")
 
 class InversionTrainer(BaseTrainer):
