@@ -660,6 +660,12 @@ class InversionExperiment(Experiment):
             data_collator=self.get_collator(tokenizer=model.tokenizer),
         )
 
+class InversionExperimentUnet(InversionExperiment):
+    def load_model(self) -> transformers.PreTrainedModel:
+        return InversionModelUnet(
+            config=self.config,
+        )
+
 
 class InversionFromLogitsExperiment(InversionExperiment):
     @property
@@ -796,6 +802,7 @@ class CorrectorExperiment(Experiment):
 
 EXPERIMENT_CLS_MAP = {
     "inversion": InversionExperiment,
+    "inversion_unet": InversionExperimentUnet,
     "inversion_decoder_only": InversionExperimentDecoderOnly,
     "inversion_from_logits": InversionFromLogitsExperiment,
     "inversion_from_logits_emb": InversionFromLogitsExperiment,
