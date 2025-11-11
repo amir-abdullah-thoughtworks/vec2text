@@ -433,7 +433,7 @@ class Experiment(abc.ABC):
                     batched=True,
                     batch_size=self.training_args.per_device_train_batch_size,
                     new_fingerprint=new_fingerprint,
-                    num_proc=1,
+                    # num_proc=1,
                 )
             tokenized_datasets = datasets.DatasetDict(new_tokenized_datasets)
         ###########################################################################
