@@ -48,7 +48,7 @@ class ModelArguments:
         default="gtr_base",
         metadata={
             "help": "Model to get embeddings from (locally)",
-            # "choices": EMBEDDER_MODEL_NAMES,
+            "choices": EMBEDDER_MODEL_NAMES,
         },
     )
     embedder_model_api: Optional[str] = field(
@@ -282,8 +282,7 @@ class TrainingArguments(transformers.TrainingArguments):
             "required": False,
             "help": "Which experiment to run (defines model, loss func, dataset...) ",
             "choices": [
-                "inversion",
-                "inversion_unet",
+                "inversion",  # our model: projects and feeds to encoder-decoder
                 "inversion_from_logits",
                 "inversion_from_logits_emb",
                 "inversion_decoder_only",  # baseline: use single embedding as input to a decoder
