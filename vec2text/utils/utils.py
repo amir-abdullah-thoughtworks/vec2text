@@ -33,6 +33,8 @@ def get_world_size() -> int:
 
 
 def get_num_proc() -> int:
+    ### Disable multiprocessing
+    return 0
     world_size: int = get_world_size()
     try:
         # os.sched_getaffinity respects schedulers, unlike cpu_count(), but it's only available
@@ -125,6 +127,11 @@ def dataset_map_multi_worker(
     dataset: datasets.Dataset, map_fn: Callable, *args, **kwargs
 ) -> datasets.Dataset:
 
+    # Disable multiprocessing for debugging.
+    kwargs["num_proc"] = 0
+    return dataset.map(map_fn, *args, **kwargs)
+
+    # Disable distributed mapping
     try:
         rank = torch.distributed.get_rank()
         world_size = torch.distributed.get_world_size()

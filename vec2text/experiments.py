@@ -21,7 +21,6 @@ from vec2text.models import (
     InversionFromLogitsEmbModel,
     InversionFromLogitsModel,
     InversionModel,
-    InversionModelUnet,
     InversionModelBagOfWords,
     InversionModelDecoderOnly,
     InversionModelNonAutoregressive,
@@ -434,7 +433,7 @@ class Experiment(abc.ABC):
                     batched=True,
                     batch_size=self.training_args.per_device_train_batch_size,
                     new_fingerprint=new_fingerprint,
-                    num_proc=1,
+                    # num_proc=1,
                 )
             tokenized_datasets = datasets.DatasetDict(new_tokenized_datasets)
         ###########################################################################
@@ -662,13 +661,6 @@ class InversionExperiment(Experiment):
         )
 
 
-class InversionExperimentUnet(InversionExperiment):
-    def load_model(self) -> transformers.PreTrainedModel:
-        return InversionModelUnet(
-            config=self.config,
-        )
-
-
 class InversionFromLogitsExperiment(InversionExperiment):
     @property
     def trainer_cls(self):
@@ -804,7 +796,6 @@ class CorrectorExperiment(Experiment):
 
 EXPERIMENT_CLS_MAP = {
     "inversion": InversionExperiment,
-    "inversion_unet": InversionExperimentUnet,
     "inversion_decoder_only": InversionExperimentDecoderOnly,
     "inversion_from_logits": InversionFromLogitsExperiment,
     "inversion_from_logits_emb": InversionFromLogitsExperiment,
