@@ -128,7 +128,7 @@ def load_xsum_val(col: str) -> datasets.Dataset:
 
 
 def load_wikibio_val() -> datasets.Dataset:
-    d = datasets.load_dataset("LM-Polygraph/wiki_bio", trust_remote_code=True)["val"]
+    d = datasets.load_dataset("thoughtworks/wiki_bio")["val"]
     d = d.rename_column("target_text", "text")
     return d
 
